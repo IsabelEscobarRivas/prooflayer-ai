@@ -76,36 +76,6 @@ CREATE TRIGGER set_updated_at
   BEFORE UPDATE ON prooflayer.assignments
   FOR EACH ROW EXECUTE FUNCTION prooflayer.set_updated_at();
 
--- Org consistency enforcement (QA checklist — assignment cross-org guard)
-CREATE OR REPLACE FUNCTION prooflayer.validate_assignment_org_consistency()
-RETURNS TRIGGER AS $$
-DECLARE
-  case_org     UUID;
-  assignee_org UUID;
-  assigner_org UUID;
-BEGIN
-  SELECT organization_id INTO case_org     FROM prooflayer.qc_cases WHERE id = NEW.qc_case_id;
-  SELECT organization_id INTO assignee_org FROM prooflayer.users    WHERE id = NEW.assigned_to;
-  SELECT organization_id INTO assigner_org FROM prooflayer.users    WHERE id = NEW.assigned_by;
-
-  IF case_org IS NULL THEN
-    RAISE EXCEPTION 'qc_case_not_found' USING ERRCODE = 'P0001';
-  END IF;
-
-  IF NEW.organization_id IS DISTINCT FROM case_org
-     OR assignee_org IS DISTINCT FROM NEW.organization_id
-     OR assigner_org IS DISTINCT FROM NEW.organization_id THEN
-    RAISE EXCEPTION 'assignment_organization_mismatch' USING ERRCODE = 'P0001';
-  END IF;
-
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER assignments_validate_org
-  BEFORE INSERT OR UPDATE ON prooflayer.assignments
-  FOR EACH ROW EXECUTE FUNCTION prooflayer.validate_assignment_org_consistency();
-
 -- ─── 7. Indexes ──────────────────────────────────────────────────────────────
 CREATE INDEX ON prooflayer.users(organization_id);
 CREATE INDEX ON prooflayer.users(email);
@@ -117,7 +87,9 @@ CREATE INDEX ON prooflayer.assignments(qc_case_id);
 CREATE INDEX ON prooflayer.assignments(assigned_to);
 CREATE INDEX ON prooflayer.assignments(status);
 
--- ─── Supabase: expose schema to service role / PostgREST ─────────────────────
+-- ─── Supabase PostgREST: expose non-public schema ────────────────────────────
+-- Required for any schema outside `public`. PostgREST only auto-exposes
+-- `public`; custom schemas must be granted explicitly or the API returns 404.
 GRANT USAGE ON SCHEMA prooflayer TO postgres, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA prooflayer TO postgres, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA prooflayer TO postgres, service_role;
