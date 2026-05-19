@@ -1,34 +1,44 @@
 # ProofLayer AI
 
-Clean restart — **Phase 1 foundation only**.
+**Phase 1 foundation** per [ADR-001](docs/adr/001-phase1-foundation.md).
 
-## Product loop (Phase 1)
+## Scope
 
-1. Enterprise creates a QC case
-2. Field worker sees available cases
-3. Field worker accepts a case
-4. Data persists in Supabase after refresh
+| In scope | Out of scope |
+|----------|----------------|
+| `prooflayer` schema: organizations, users, qc_cases, assignments | Evidence, storage, Gemini, evaluations |
+| REST API (ADR §6) | RLS, audit/events, geo, reports |
+| Supabase service-role server access | JSONB, demo seeds, in-memory store |
 
-## Not in this repo yet
+## Database
 
-Uploads, Gemini, geo enforcement, reports, analytics, audit logs, in-memory store, or legacy migrations.
+```bash
+# Supabase SQL Editor — run once on a new project:
+# supabase/migrations/001_foundation.sql
+```
 
-## Setup (when implementation lands)
+- Schema: **`prooflayer`** (not `public`)
+- UUID PKs; `users.id` = `auth.users.id` (no default)
+- `updated_at` via trigger only
+- No seed data in migration
+
+## Environment
 
 ```bash
 cp .env.example .env.local
-# Apply supabase/migrations/001_foundation.sql to a new Supabase project
-npm install
-npm run dev
 ```
 
-## Demo accounts (seeded in migration)
+## Docs
 
-| Role | Email | Password |
-|------|-------|----------|
-| Enterprise | `alex@prooflayer.ai` | `demo123` |
-| Field | `jordan@prooflayer.ai` | `demo123` |
+- [ADR-001](docs/adr/001-phase1-foundation.md)
+- [QA checklist](docs/PHASE1_QA_CHECKLIST.md)
+- [SQL smoke test](docs/PHASE1_SMOKE_TEST.md)
 
-## Archived work
+## Archived
 
-Previous unstable builds live in [prooflayer-ai_discarded](https://github.com/IsabelEscobarRivas/prooflayer-ai_discarded).
+Previous builds: [prooflayer-ai_discarded](https://github.com/IsabelEscobarRivas/prooflayer-ai_discarded)
+
+## Status
+
+**Migration:** ADR-001 aligned  
+**Application:** not yet implemented — Next.js API + UI pending

@@ -1,32 +1,68 @@
-# Phase 1 — SQL smoke test (mandatory)
+# Phase 1 — manual SQL smoke test
 
-Run in Supabase SQL Editor after applying `supabase/migrations/001_foundation.sql`.
+Apply `supabase/migrations/001_foundation.sql` on a **new** Supabase project. ADR-001: **no seeds** — create test data via SQL or API.
 
-## Seed
+## 1. Schema verification
 
 ```sql
-SELECT id, slug FROM organizations;
-SELECT id, email, role FROM users ORDER BY role;
+SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'prooflayer';
+
+SELECT table_name FROM information_schema.tables
+WHERE table_schema = 'prooflayer' ORDER BY table_name;
+-- Expect: assignments, organizations, qc_cases, users
+
+SELECT tablename FROM pg_tables
+WHERE schemaname = 'public' AND tablename IN ('organizations', 'users', 'qc_cases', 'assignments');
+-- Expect: zero rows
 ```
 
-## After create + accept (replace `<case_id>`)
+## 2. Fixture (replace UUIDs after creating auth users)
 
 ```sql
-SELECT id, status, created_by FROM qc_cases WHERE id = '<case_id>';
-SELECT * FROM assignments WHERE case_id = '<case_id>';
-SELECT status FROM qc_cases WHERE id = '<case_id>';  -- expect active
+-- After creating matching rows in auth.users:
+INSERT INTO prooflayer.organizations (id, name, slug)
+VALUES ('00000000-0000-4000-8000-000000000001', 'ProofLayer Demo', 'prooflayer-demo');
+
+INSERT INTO prooflayer.users (id, organization_id, email, full_name, role)
+VALUES
+  ('11111111-1111-4111-8111-111111111111', '00000000-0000-4000-8000-000000000001', 'alex@prooflayer.ai', 'Alex Chen', 'enterprise'),
+  ('22222222-2222-4222-8222-222222222222', '00000000-0000-4000-8000-000000000001', 'jordan@prooflayer.ai', 'Jordan Rivera', 'field_worker');
 ```
 
-## Available vs assigned
+## 3. Case + assignment flow
 
 ```sql
--- Should include case before accept:
-SELECT c.id FROM qc_cases c
-WHERE c.status = 'open'
-  AND NOT EXISTS (SELECT 1 FROM assignments a WHERE a.case_id = c.id);
+INSERT INTO prooflayer.qc_cases (organization_id, title, status, created_by)
+VALUES (
+  '00000000-0000-4000-8000-000000000001',
+  'Smoke test case',
+  'open',
+  '11111111-1111-4111-8111-111111111111'
+)
+RETURNING id;
 
--- Should exclude case after accept:
-SELECT a.id, c.title FROM assignments a
-JOIN qc_cases c ON c.id = a.case_id
-WHERE a.worker_id = 'user_jordan_002';
+-- Use returned case id:
+INSERT INTO prooflayer.assignments (organization_id, qc_case_id, assigned_to, assigned_by, status)
+VALUES (
+  '00000000-0000-4000-8000-000000000001',
+  '<case_id>',
+  '22222222-2222-4222-8222-222222222222',
+  '11111111-1111-4111-8111-111111111111',
+  'in_progress'
+);
+
+SELECT * FROM prooflayer.assignments WHERE qc_case_id = '<case_id>';
+```
+
+## 4. Org consistency (must fail)
+
+```sql
+-- Expect error: assignment_organization_mismatch
+INSERT INTO prooflayer.assignments (organization_id, qc_case_id, assigned_to, assigned_by)
+VALUES (
+  '00000000-0000-4000-8000-000000000099',
+  '<case_id>',
+  '22222222-2222-4222-8222-222222222222',
+  '11111111-1111-4111-8111-111111111111'
+);
 ```
