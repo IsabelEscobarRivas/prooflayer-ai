@@ -1,130 +1,124 @@
 -- ADR-001: ProofLayer Phase 1 foundation (prooflayer schema)
 -- No seeds. No demo data. Apply on a new Supabase project.
 
-create extension if not exists "pgcrypto";
+-- ─── 1. Schema ───────────────────────────────────────────────────────────────
+CREATE SCHEMA IF NOT EXISTS prooflayer;
 
-create schema if not exists prooflayer;
+-- ─── 2. updated_at trigger function (applied to all Phase 1 tables) ──────────
+CREATE OR REPLACE FUNCTION prooflayer.set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- ─── updated_at trigger (all Phase 1 tables) ─────────────────────────────────
-create or replace function prooflayer.set_updated_at()
-returns trigger
-language plpgsql
-as $$
-begin
-  new.updated_at = now();
-  return new;
-end;
-$$;
-
--- ─── organizations ───────────────────────────────────────────────────────────
-create table prooflayer.organizations (
-  id          uuid primary key default gen_random_uuid(),
-  name        text not null,
-  slug        text not null unique,
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+-- ─── 3. organizations ────────────────────────────────────────────────────────
+CREATE TABLE prooflayer.organizations (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name        TEXT NOT NULL,
+  slug        TEXT UNIQUE NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-create trigger organizations_set_updated_at
-  before update on prooflayer.organizations
-  for each row execute function prooflayer.set_updated_at();
+CREATE TRIGGER set_updated_at
+  BEFORE UPDATE ON prooflayer.organizations
+  FOR EACH ROW EXECUTE FUNCTION prooflayer.set_updated_at();
 
--- ─── users (id mirrors auth.users.id — no default) ───────────────────────────
-create table prooflayer.users (
-  id               uuid primary key,
-  organization_id  uuid not null references prooflayer.organizations (id) on delete restrict,
-  email            text not null unique,
-  full_name        text,
-  role             text not null check (role in ('enterprise', 'field_worker')),
-  created_at       timestamptz not null default now(),
-  updated_at       timestamptz not null default now()
+-- ─── 4. users (id mirrors auth.users.id — no DEFAULT) ────────────────────────
+CREATE TABLE prooflayer.users (
+  id              UUID PRIMARY KEY,
+  organization_id UUID NOT NULL REFERENCES prooflayer.organizations(id),
+  email           TEXT UNIQUE NOT NULL,
+  full_name       TEXT,
+  role            TEXT NOT NULL CHECK (role IN ('enterprise', 'field_worker')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-create index idx_users_organization_id on prooflayer.users (organization_id);
-create index idx_users_email on prooflayer.users (email);
+CREATE TRIGGER set_updated_at
+  BEFORE UPDATE ON prooflayer.users
+  FOR EACH ROW EXECUTE FUNCTION prooflayer.set_updated_at();
 
-create trigger users_set_updated_at
-  before update on prooflayer.users
-  for each row execute function prooflayer.set_updated_at();
-
--- ─── qc_cases ────────────────────────────────────────────────────────────────
-create table prooflayer.qc_cases (
-  id               uuid primary key default gen_random_uuid(),
-  organization_id  uuid not null references prooflayer.organizations (id) on delete restrict,
-  title            text not null,
-  description      text,
-  status           text not null default 'draft'
-    check (status in ('draft', 'open', 'in_review', 'closed')),
-  created_by       uuid not null references prooflayer.users (id) on delete restrict,
-  created_at       timestamptz not null default now(),
-  updated_at       timestamptz not null default now()
+-- ─── 5. qc_cases ─────────────────────────────────────────────────────────────
+CREATE TABLE prooflayer.qc_cases (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES prooflayer.organizations(id),
+  title           TEXT NOT NULL,
+  description     TEXT,
+  status          TEXT NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft', 'open', 'in_review', 'closed')),
+  created_by      UUID NOT NULL REFERENCES prooflayer.users(id),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-create index idx_qc_cases_organization_id on prooflayer.qc_cases (organization_id);
-create index idx_qc_cases_created_by on prooflayer.qc_cases (created_by);
-create index idx_qc_cases_status on prooflayer.qc_cases (status);
+CREATE TRIGGER set_updated_at
+  BEFORE UPDATE ON prooflayer.qc_cases
+  FOR EACH ROW EXECUTE FUNCTION prooflayer.set_updated_at();
 
-create trigger qc_cases_set_updated_at
-  before update on prooflayer.qc_cases
-  for each row execute function prooflayer.set_updated_at();
-
--- ─── assignments ─────────────────────────────────────────────────────────────
-create table prooflayer.assignments (
-  id               uuid primary key default gen_random_uuid(),
-  organization_id  uuid not null references prooflayer.organizations (id) on delete restrict,
-  qc_case_id       uuid not null references prooflayer.qc_cases (id) on delete cascade,
-  assigned_to      uuid not null references prooflayer.users (id) on delete restrict,
-  assigned_by      uuid not null references prooflayer.users (id) on delete restrict,
-  status           text not null default 'pending'
-    check (status in ('pending', 'in_progress', 'submitted', 'approved', 'rejected')),
-  due_at           timestamptz,
-  created_at       timestamptz not null default now(),
-  updated_at       timestamptz not null default now()
+-- ─── 6. assignments ──────────────────────────────────────────────────────────
+CREATE TABLE prooflayer.assignments (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES prooflayer.organizations(id),
+  qc_case_id      UUID NOT NULL REFERENCES prooflayer.qc_cases(id),
+  assigned_to     UUID NOT NULL REFERENCES prooflayer.users(id),
+  assigned_by     UUID NOT NULL REFERENCES prooflayer.users(id),
+  status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'in_progress', 'submitted', 'approved', 'rejected')),
+  due_at          TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-create index idx_assignments_organization_id on prooflayer.assignments (organization_id);
-create index idx_assignments_qc_case_id on prooflayer.assignments (qc_case_id);
-create index idx_assignments_assigned_to on prooflayer.assignments (assigned_to);
-create index idx_assignments_status on prooflayer.assignments (status);
+CREATE TRIGGER set_updated_at
+  BEFORE UPDATE ON prooflayer.assignments
+  FOR EACH ROW EXECUTE FUNCTION prooflayer.set_updated_at();
 
-create trigger assignments_set_updated_at
-  before update on prooflayer.assignments
-  for each row execute function prooflayer.set_updated_at();
+-- Org consistency enforcement (QA checklist — assignment cross-org guard)
+CREATE OR REPLACE FUNCTION prooflayer.validate_assignment_org_consistency()
+RETURNS TRIGGER AS $$
+DECLARE
+  case_org     UUID;
+  assignee_org UUID;
+  assigner_org UUID;
+BEGIN
+  SELECT organization_id INTO case_org     FROM prooflayer.qc_cases WHERE id = NEW.qc_case_id;
+  SELECT organization_id INTO assignee_org FROM prooflayer.users    WHERE id = NEW.assigned_to;
+  SELECT organization_id INTO assigner_org FROM prooflayer.users    WHERE id = NEW.assigned_by;
 
--- Cross-table org consistency (ADR §3.4)
-create or replace function prooflayer.validate_assignment_org_consistency()
-returns trigger
-language plpgsql
-as $$
-declare
-  case_org uuid;
-  assignee_org uuid;
-  assigner_org uuid;
-begin
-  select organization_id into case_org from prooflayer.qc_cases where id = new.qc_case_id;
-  select organization_id into assignee_org from prooflayer.users where id = new.assigned_to;
-  select organization_id into assigner_org from prooflayer.users where id = new.assigned_by;
+  IF case_org IS NULL THEN
+    RAISE EXCEPTION 'qc_case_not_found' USING ERRCODE = 'P0001';
+  END IF;
 
-  if case_org is null then
-    raise exception 'qc_case_not_found' using errcode = 'P0001';
-  end if;
+  IF NEW.organization_id IS DISTINCT FROM case_org
+     OR assignee_org IS DISTINCT FROM NEW.organization_id
+     OR assigner_org IS DISTINCT FROM NEW.organization_id THEN
+    RAISE EXCEPTION 'assignment_organization_mismatch' USING ERRCODE = 'P0001';
+  END IF;
 
-  if new.organization_id is distinct from case_org
-     or assignee_org is distinct from new.organization_id
-     or assigner_org is distinct from new.organization_id then
-    raise exception 'assignment_organization_mismatch' using errcode = 'P0001';
-  end if;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-  return new;
-end;
-$$;
+CREATE TRIGGER assignments_validate_org
+  BEFORE INSERT OR UPDATE ON prooflayer.assignments
+  FOR EACH ROW EXECUTE FUNCTION prooflayer.validate_assignment_org_consistency();
 
-create trigger assignments_validate_org
-  before insert or update on prooflayer.assignments
-  for each row execute function prooflayer.validate_assignment_org_consistency();
+-- ─── 7. Indexes ──────────────────────────────────────────────────────────────
+CREATE INDEX ON prooflayer.users(organization_id);
+CREATE INDEX ON prooflayer.users(email);
+CREATE INDEX ON prooflayer.qc_cases(organization_id);
+CREATE INDEX ON prooflayer.qc_cases(created_by);
+CREATE INDEX ON prooflayer.qc_cases(status);
+CREATE INDEX ON prooflayer.assignments(organization_id);
+CREATE INDEX ON prooflayer.assignments(qc_case_id);
+CREATE INDEX ON prooflayer.assignments(assigned_to);
+CREATE INDEX ON prooflayer.assignments(status);
 
--- Expose schema to Supabase API (service role / PostgREST)
-grant usage on schema prooflayer to postgres, service_role;
-grant all on all tables in schema prooflayer to postgres, service_role;
-grant all on all sequences in schema prooflayer to postgres, service_role;
-alter default privileges in schema prooflayer grant all on tables to postgres, service_role;
+-- ─── Supabase: expose schema to service role / PostgREST ─────────────────────
+GRANT USAGE ON SCHEMA prooflayer TO postgres, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA prooflayer TO postgres, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA prooflayer TO postgres, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA prooflayer GRANT ALL ON TABLES TO postgres, service_role;
