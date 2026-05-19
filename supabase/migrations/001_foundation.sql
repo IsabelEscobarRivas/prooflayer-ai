@@ -87,6 +87,10 @@ CREATE INDEX ON prooflayer.assignments(qc_case_id);
 CREATE INDEX ON prooflayer.assignments(assigned_to);
 CREATE INDEX ON prooflayer.assignments(status);
 
+CREATE UNIQUE INDEX uq_assignments_case_worker
+  ON prooflayer.assignments(qc_case_id, assigned_to)
+  WHERE status NOT IN ('rejected');
+
 -- ─── Supabase PostgREST: expose non-public schema ────────────────────────────
 -- Required for any schema outside `public`. PostgREST only auto-exposes
 -- `public`; custom schemas must be granted explicitly or the API returns 404.

@@ -113,6 +113,16 @@ export default function FieldPage() {
         setAcceptError(await errorFromResponse(res));
         return;
       }
+      const created = (await res.json()) as Assignment;
+      const patchRes = await fetch(`/api/assignments/${created.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'in_progress' }),
+      });
+      if (!patchRes.ok) {
+        setAcceptError(await errorFromResponse(patchRes));
+        return;
+      }
       await refresh();
     } catch (err) {
       setAcceptError(err instanceof Error ? err.message : 'Failed to accept case');
