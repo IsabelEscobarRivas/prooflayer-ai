@@ -1,0 +1,90 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { validateAssignmentOrganization } from '@/lib/api/assignments';
+import {
+  dbUnavailableError,
+  mapPostgresError,
+  requireOrganizationId,
+} from '@/lib/api/http';
+import { getProoflayerDb } from '@/lib/supabase/server';
+
+export const dynamic = 'force-dynamic';
+
+export async function GET(req: NextRequest) {
+  try {
+    const organizationId = requireOrganizationId(req.nextUrl.searchParams);
+    if (organizationId instanceof NextResponse) return organizationId;
+
+    const qcCaseId = req.nextUrl.searchParams.get('qc_case_id')?.trim();
+    const assignedTo = req.nextUrl.searchParams.get('assigned_to')?.trim();
+    const status = req.nextUrl.searchParams.get('status')?.trim();
+
+    const db = getProoflayerDb();
+    let query = db.from('assignments').select('*').eq('organization_id', organizationId);
+
+    if (qcCaseId) query = query.eq('qc_case_id', qcCaseId);
+    if (assignedTo) query = query.eq('assigned_to', assignedTo);
+    if (status) query = query.eq('status', status);
+
+    const { data, error } = await query.order('created_at', { ascending: false });
+    if (error) throw error;
+    return NextResponse.json(data ?? []);
+  } catch (err) {
+    return dbUnavailableError(err);
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const {
+      organization_id,
+      qc_case_id,
+      assigned_to,
+      assigned_by,
+      status,
+      due_at,
+    } = body;
+
+    if (!organization_id || !qc_case_id || !assigned_to || !assigned_by) {
+      return NextResponse.json(
+        {
+          error:
+            'organization_id, qc_case_id, assigned_to, and assigned_by are required',
+        },
+        { status: 400 },
+      );
+    }
+
+    const db = getProoflayerDb();
+    const validation = await validateAssignmentOrganization(db, {
+      organization_id,
+      qc_case_id,
+      assigned_to,
+      assigned_by,
+    });
+
+    if (!validation.ok) {
+      return NextResponse.json({ error: validation.error }, { status: 422 });
+    }
+
+    const { data, error } = await db
+      .from('assignments')
+      .insert({
+        organization_id,
+        qc_case_id,
+        assigned_to,
+        assigned_by,
+        status: status ?? 'pending',
+        due_at: due_at ?? null,
+      })
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    return NextResponse.json(data, { status: 201 });
+  } catch (err) {
+    const mapped = mapPostgresError(err);
+    if (mapped) return mapped;
+    return dbUnavailableError(err);
+  }
+}
