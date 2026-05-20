@@ -10,6 +10,7 @@ export async function GET(req: NextRequest) {
     if (organizationId instanceof NextResponse) return organizationId;
 
     const status = req.nextUrl.searchParams.get('status')?.trim();
+    const available = req.nextUrl.searchParams.get('available') === 'true';
 
     const db = getProoflayerDb();
     let query = db.from('qc_cases').select('*').eq('organization_id', organizationId);
@@ -20,7 +21,25 @@ export async function GET(req: NextRequest) {
 
     const { data, error } = await query.order('created_at', { ascending: false });
     if (error) throw error;
-    return NextResponse.json(data ?? []);
+
+    let cases = data ?? [];
+
+    if (available) {
+      const { data: activeAssignments, error: assignErr } = await db
+        .from('assignments')
+        .select('qc_case_id')
+        .eq('organization_id', organizationId)
+        .neq('status', 'rejected');
+
+      if (assignErr) throw assignErr;
+
+      const claimedCaseIds = new Set(
+        (activeAssignments ?? []).map((a) => a.qc_case_id as string),
+      );
+      cases = cases.filter((c) => !claimedCaseIds.has(c.id));
+    }
+
+    return NextResponse.json(cases);
   } catch (err) {
     return dbUnavailableError(err);
   }
