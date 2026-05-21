@@ -1,8 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError } from '@/lib/api/http';
+import {
+  dbUnavailableError,
+  mapPostgresError,
+  requireOrganizationId,
+} from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
+
+export async function GET(req: NextRequest) {
+  try {
+    const organizationId = requireOrganizationId(req.nextUrl.searchParams);
+    if (organizationId instanceof NextResponse) return organizationId;
+
+    const assignmentId = req.nextUrl.searchParams.get('assignment_id')?.trim();
+
+    const db = getProoflayerDb();
+    let query = db.from('submissions').select('*').eq('organization_id', organizationId);
+
+    if (assignmentId) {
+      query = query.eq('assignment_id', assignmentId);
+    }
+
+    const { data, error } = await query.order('created_at', { ascending: false });
+    if (error) throw error;
+    return NextResponse.json(data ?? []);
+  } catch (err) {
+    return dbUnavailableError(err);
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {

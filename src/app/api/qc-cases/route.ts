@@ -60,6 +60,11 @@ export async function POST(req: NextRequest) {
       barcode_sku,
       time_window_start,
       time_window_end,
+      geo_lat,
+      geo_lng,
+      geo_radius_m,
+      priority,
+      external_ref,
       status,
       created_by,
     } = body;
@@ -86,6 +91,11 @@ export async function POST(req: NextRequest) {
         barcode_sku: barcode_sku ?? null,
         time_window_start: time_window_start ?? null,
         time_window_end: time_window_end ?? null,
+        geo_lat: geo_lat ?? null,
+        geo_lng: geo_lng ?? null,
+        geo_radius_m: geo_radius_m ?? null,
+        priority: priority ?? 'normal',
+        external_ref: external_ref ?? null,
         status: status ?? 'draft',
         created_by,
       })
