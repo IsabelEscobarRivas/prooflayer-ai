@@ -64,6 +64,10 @@ async function errorFromResponse(res: Response): Promise<string> {
   return res.statusText || `Request failed (${res.status})`;
 }
 
+function formatStatus(status: string): string {
+  return status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function badge(status: string): React.CSSProperties {
   const s = STATUS_COLORS[status] ?? { bg: '#eee', color: '#666' };
   return {
@@ -74,16 +78,28 @@ function badge(status: string): React.CSSProperties {
     fontWeight: 700,
     background: s.bg,
     color: s.color,
-    textTransform: 'uppercase',
     marginRight: 4,
   };
 }
 
-function formatWindow(start: string | null, end: string | null): string {
-  if (!start && !end) return '—';
-  const f = (v: string) => new Date(v).toLocaleString();
-  if (start && end) return `${f(start)} → ${f(end)}`;
-  return start ? f(start) : end ? f(end) : '—';
+const TIME_DISPLAY_OPTS: Intl.DateTimeFormatOptions = {
+  month: 'long',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+};
+
+function formatTime(ts: string): string {
+  return new Date(ts).toLocaleDateString(undefined, TIME_DISPLAY_OPTS);
+}
+
+function formatTimeWindow(start: string | null, end: string | null): string | null {
+  if (!start && !end) return null;
+  if (start && end) return `${formatTime(start)} → ${formatTime(end)}`;
+  if (start) return formatTime(start);
+  if (end) return formatTime(end);
+  return null;
 }
 
 function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -377,12 +393,16 @@ export default function FieldPage() {
               <strong style={{ color: NAVY, fontSize: '1.05rem' }}>{c.title}</strong>
               <p style={{ margin: '0.35rem 0', color: '#555', fontSize: '0.9rem' }}>{[c.store_name, c.store_address].filter(Boolean).join(' · ')}</p>
               <p style={{ margin: 0, fontSize: '0.85rem', color: '#777' }}>{[c.item_name, c.barcode_sku].filter(Boolean).join(' · ')}</p>
-              <p style={{ margin: '0.25rem 0', fontSize: '0.8rem', color: '#999' }}>{formatWindow(c.time_window_start, c.time_window_end)}</p>
+              {formatTimeWindow(c.time_window_start, c.time_window_end) && (
+                <p style={{ margin: '0.25rem 0', fontSize: '0.8rem', color: '#999' }}>
+                  {formatTimeWindow(c.time_window_start, c.time_window_end)}
+                </p>
+              )}
               {c.instructions && <p style={{ fontSize: '0.9rem', margin: '0.5rem 0' }}><strong>Brief:</strong> {c.instructions}</p>}
               <p style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}><strong>Evidence required:</strong></p>
               <ul style={{ margin: '0.25rem 0', paddingLeft: '1.2rem', fontSize: '0.85rem' }}>
                 {(templatesByCase[c.id] ?? []).map((t) => (
-                  <li key={t.id}><span style={badge(t.kind)}>{t.kind}</span> {t.label}</li>
+                  <li key={t.id}><span style={badge(t.kind)}>{formatStatus(t.kind)}</span> {t.label}</li>
                 ))}
               </ul>
               <button type="button" disabled={acceptingId === c.id} onClick={() => handleAccept(c.id)} style={{ ...btnPrimary(BLUE), marginTop: '0.75rem' }}>
@@ -406,13 +426,17 @@ export default function FieldPage() {
               <div key={a.id} style={listCard}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <strong style={{ color: NAVY }}>{qc?.title ?? a.qc_case_id}</strong>
-                  <span style={badge(a.status)}>{a.status}</span>
+                  <span style={badge(a.status)}>{formatStatus(a.status)}</span>
                 </div>
                 {qc && (
                   <>
                     <p style={{ margin: '0.35rem 0', fontSize: '0.9rem', color: '#555' }}>{[qc.store_name, qc.store_address].filter(Boolean).join(' · ')}</p>
                     <p style={{ margin: 0, fontSize: '0.85rem', color: '#777' }}>{[qc.item_name, qc.barcode_sku].filter(Boolean).join(' · ')}</p>
-                    <p style={{ fontSize: '0.8rem', color: '#999' }}>{formatWindow(qc.time_window_start, qc.time_window_end)}</p>
+                    {formatTimeWindow(qc.time_window_start, qc.time_window_end) && (
+                      <p style={{ fontSize: '0.8rem', color: '#999' }}>
+                        {formatTimeWindow(qc.time_window_start, qc.time_window_end)}
+                      </p>
+                    )}
                   </>
                 )}
 
@@ -444,9 +468,9 @@ export default function FieldPage() {
                       const uploaded = files.filter((f) => f.assignment_evidence_requirement_id === r.id);
                       return (
                         <div key={r.id} style={{ background: '#fafbfc', padding: '0.65rem', borderRadius: 6, marginBottom: 6 }}>
-                          <span style={badge(r.kind)}>{r.kind}</span> <strong>{r.label}</strong>
+                          <span style={badge(r.kind)}>{formatStatus(r.kind)}</span> <strong>{r.label}</strong>
                           {r.is_mandatory && <span style={{ color: '#E65100' }}> *</span>}
-                          <span style={badge(r.status)}>{r.status}</span>
+                          <span style={badge(r.status)}>{formatStatus(r.status)}</span>
                           {uploaded.length > 0 && <span style={{ fontSize: '0.75rem', color: '#2E7D32', marginLeft: 6 }}>{uploaded.length} file(s)</span>}
                           <div style={{ marginTop: 6 }}>
                             <label style={{ fontSize: '0.8rem', cursor: 'pointer' }}>

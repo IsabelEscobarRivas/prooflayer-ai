@@ -82,6 +82,10 @@ async function errorFromResponse(res: Response): Promise<string> {
   return res.statusText || `Request failed (${res.status})`;
 }
 
+function formatStatus(status: string): string {
+  return status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function badge(status: string): React.CSSProperties {
   const s = STATUS_COLORS[status] ?? { bg: '#eee', color: '#666' };
   return {
@@ -92,16 +96,28 @@ function badge(status: string): React.CSSProperties {
     fontWeight: 700,
     background: s.bg,
     color: s.color,
-    textTransform: 'uppercase',
     marginRight: '0.35rem',
   };
 }
 
-function formatWindow(start: string | null, end: string | null): string {
-  if (!start && !end) return '—';
-  const f = (v: string) => new Date(v).toLocaleString();
-  if (start && end) return `${f(start)} → ${f(end)}`;
-  return start ? f(start) : end ? f(end) : '—';
+const TIME_DISPLAY_OPTS: Intl.DateTimeFormatOptions = {
+  month: 'long',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+};
+
+function formatTime(ts: string): string {
+  return new Date(ts).toLocaleDateString(undefined, TIME_DISPLAY_OPTS);
+}
+
+function formatTimeWindow(start: string | null, end: string | null): string | null {
+  if (!start && !end) return null;
+  if (start && end) return `${formatTime(start)} → ${formatTime(end)}`;
+  if (start) return formatTime(start);
+  if (end) return formatTime(end);
+  return null;
 }
 
 function toLocalDatetimeValue(iso?: string): string {
@@ -120,9 +136,9 @@ export default function EnterprisePage() {
   const [externalRef, setExternalRef] = useState('');
   const [storeName, setStoreName] = useState('');
   const [storeAddress, setStoreAddress] = useState('');
-  const [geoLat, setGeoLat] = useState('');
-  const [geoLng, setGeoLng] = useState('');
-  const [geoRadius, setGeoRadius] = useState('100');
+  const [geoLat, setGeoLat] = useState<number | null>(null);
+  const [geoLng, setGeoLng] = useState<number | null>(null);
+  const [geoRadius, setGeoRadius] = useState(100);
   const [itemName, setItemName] = useState('');
   const [barcodeSku, setBarcodeSku] = useState('');
   const [timeStart, setTimeStart] = useState('');
@@ -234,27 +250,23 @@ export default function EnterprisePage() {
   const filteredCases =
     caseFilter === 'all' ? cases : cases.filter((c) => c.status === caseFilter);
 
-  async function findCoordinates() {
-    if (!storeAddress.trim()) {
-      setFormError('Enter a store address first');
-      return;
-    }
+  async function findCoordinates(address: string) {
+    if (!address.trim()) return;
     setGeocoding(true);
     setFormError(null);
     try {
-      const q = encodeURIComponent(storeAddress.trim());
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`,
-        { headers: { 'Accept-Language': 'en' } },
-      );
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`;
+      const res = await fetch(url, {
+        headers: { 'Accept-Language': 'en', 'User-Agent': 'ProofLayer/1.0' },
+      });
       if (!res.ok) throw new Error('Geocoding request failed');
       const data = (await res.json()) as { lat: string; lon: string }[];
-      if (!data.length) {
-        setFormError('No coordinates found for this address');
-        return;
+      if (data && data.length > 0) {
+        setGeoLat(parseFloat(data[0].lat));
+        setGeoLng(parseFloat(data[0].lon));
+      } else {
+        setFormError('Address not found. Enter coordinates manually.');
       }
-      setGeoLat(Number(data[0].lat).toFixed(7));
-      setGeoLng(Number(data[0].lon).toFixed(7));
     } catch (e) {
       setFormError(e instanceof Error ? e.message : 'Geocoding failed');
     } finally {
@@ -268,9 +280,9 @@ export default function EnterprisePage() {
     setExternalRef('');
     setStoreName('');
     setStoreAddress('');
-    setGeoLat('');
-    setGeoLng('');
-    setGeoRadius('100');
+    setGeoLat(null);
+    setGeoLng(null);
+    setGeoRadius(100);
     setItemName('');
     setBarcodeSku('');
     setTimeStart('');
@@ -310,9 +322,9 @@ export default function EnterprisePage() {
           barcode_sku: barcodeSku.trim(),
           time_window_start: new Date(timeStart).toISOString(),
           time_window_end: new Date(timeEnd).toISOString(),
-          geo_lat: geoLat ? Number(geoLat) : null,
-          geo_lng: geoLng ? Number(geoLng) : null,
-          geo_radius_m: geoRadius ? Number(geoRadius) : null,
+          geo_lat: geoLat,
+          geo_lng: geoLng,
+          geo_radius_m: geoRadius,
           priority,
           external_ref: externalRef.trim() || null,
           status: 'draft',
@@ -498,13 +510,54 @@ export default function EnterprisePage() {
                 <h3 style={h3}>Store &amp; Location</h3>
                 <Field label="Store Name *" value={storeName} onChange={setStoreName} />
                 <Field label="Store Address *" value={storeAddress} onChange={setStoreAddress} />
-                <button type="button" onClick={findCoordinates} disabled={geocoding} style={{ ...btnGhost, marginBottom: '0.75rem' }}>
+                <button
+                  type="button"
+                  onClick={() => findCoordinates(storeAddress)}
+                  disabled={geocoding}
+                  style={{ ...btnGhost, marginBottom: '0.75rem' }}
+                >
                   {geocoding ? 'Finding…' : 'Find Coordinates'}
                 </button>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
-                  <Field label="Latitude *" value={geoLat} onChange={setGeoLat} type="number" />
-                  <Field label="Longitude *" value={geoLng} onChange={setGeoLng} type="number" />
-                  <Field label="Geofence (m)" value={geoRadius} onChange={setGeoRadius} type="number" />
+                  <label style={lbl}>
+                    Latitude *
+                    <input
+                      type="number"
+                      step="any"
+                      value={geoLat ?? ''}
+                      onChange={(e) =>
+                        setGeoLat(e.target.value === '' ? null : parseFloat(e.target.value))
+                      }
+                      style={inp}
+                    />
+                  </label>
+                  <label style={lbl}>
+                    Longitude *
+                    <input
+                      type="number"
+                      step="any"
+                      value={geoLng ?? ''}
+                      onChange={(e) =>
+                        setGeoLng(e.target.value === '' ? null : parseFloat(e.target.value))
+                      }
+                      style={inp}
+                    />
+                  </label>
+                  <label style={lbl}>
+                    Geofence Radius (metres)
+                    <input
+                      type="number"
+                      min={10}
+                      max={5000}
+                      step={10}
+                      value={geoRadius}
+                      onChange={(e) => setGeoRadius(Number(e.target.value))}
+                      style={inp}
+                    />
+                    <span style={{ display: 'block', marginTop: 4, fontSize: '0.75rem', color: '#64748b', fontWeight: 400 }}>
+                      Default 100m. Increase for large store footprints.
+                    </span>
+                  </label>
                 </div>
               </div>
 
@@ -536,7 +589,7 @@ export default function EnterprisePage() {
                 <h3 style={h3}>Evidence Requirements</h3>
                 {draftReqs.map((r) => (
                   <div key={r.tempId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: LIGHT_BLUE, padding: '0.5rem', borderRadius: 6, marginBottom: 6 }}>
-                    <span><span style={badge(r.kind)}>{r.kind}</span> <strong>{r.label}</strong></span>
+                    <span><span style={badge(r.kind)}>{formatStatus(r.kind)}</span> <strong>{r.label}</strong></span>
                     <button type="button" onClick={() => setDraftReqs((p) => p.filter((x) => x.tempId !== r.tempId))} style={btnDanger}>Delete</button>
                   </div>
                 ))}
@@ -578,11 +631,15 @@ export default function EnterprisePage() {
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <div>
                     <strong style={{ color: NAVY, fontSize: '1.05rem' }}>{c.title}</strong>
-                    <span style={badge(c.priority)}>{c.priority}</span>
-                    <span style={badge(c.status)}>{c.status}</span>
+                    <span style={badge(c.priority)}>{formatStatus(c.priority)}</span>
+                    <span style={badge(c.status)}>{formatStatus(c.status)}</span>
                     <p style={{ margin: '0.35rem 0 0', color: '#555', fontSize: '0.9rem' }}>{[c.store_name, c.store_address].filter(Boolean).join(' · ')}</p>
                     <p style={{ margin: 0, fontSize: '0.85rem', color: '#777' }}>{[c.item_name, c.barcode_sku].filter(Boolean).join(' · ')}</p>
-                    <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#999' }}>{formatWindow(c.time_window_start, c.time_window_end)}</p>
+                    {formatTimeWindow(c.time_window_start, c.time_window_end) && (
+                      <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#999' }}>
+                        {formatTimeWindow(c.time_window_start, c.time_window_end)}
+                      </p>
+                    )}
                     {c.geo_radius_m != null && <p style={{ margin: 0, fontSize: '0.8rem', color: '#999' }}>Geofence: {c.geo_radius_m}m</p>}
                   </div>
                   <span style={{ fontSize: '0.8rem', color: '#666' }}>{(assignmentsByCase[c.id] ?? []).length} assignment(s)</span>
@@ -592,11 +649,11 @@ export default function EnterprisePage() {
                 <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #e0e0e0' }}>
                   <p><strong>Instructions:</strong> {c.instructions || '—'}</p>
                   <p style={{ marginTop: '0.5rem' }}><strong>Templates:</strong></p>
-                  <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>{caseTemplates.map((t) => <li key={t.id}><span style={badge(t.kind)}>{t.kind}</span> {t.label}</li>)}</ul>
+                  <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>{caseTemplates.map((t) => <li key={t.id}><span style={badge(t.kind)}>{formatStatus(t.kind)}</span> {t.label}</li>)}</ul>
                   <p style={{ marginTop: '0.5rem' }}><strong>Assignments:</strong></p>
                   <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.9rem' }}>
                     {(assignmentsByCase[c.id] ?? []).map((a) => (
-                      <li key={a.id}>{a.assigned_to.slice(0, 8)}… <span style={badge(a.status)}>{a.status}</span></li>
+                      <li key={a.id}>{a.assigned_to.slice(0, 8)}… <span style={badge(a.status)}>{formatStatus(a.status)}</span></li>
                     ))}
                     {(assignmentsByCase[c.id] ?? []).length === 0 && <li>None</li>}
                   </ul>
@@ -628,9 +685,9 @@ export default function EnterprisePage() {
                 {expandedReviewId === a.id && (
                   <div style={{ marginTop: '1rem', borderTop: '1px solid #e0e0e0', paddingTop: '1rem' }}>
                     <p><strong>Event history</strong></p>
-                    <ul style={{ fontSize: '0.85rem', paddingLeft: '1.2rem' }}>{reviewEvents.map((e) => <li key={e.id}>{e.event_type}: {e.from_status ?? '—'} → {e.to_status} ({new Date(e.created_at).toLocaleString()}){e.reason ? ` — ${e.reason}` : ''}</li>)}</ul>
+                    <ul style={{ fontSize: '0.85rem', paddingLeft: '1.2rem' }}>{reviewEvents.map((e) => <li key={e.id}>{formatStatus(e.event_type)}: {e.from_status ? formatStatus(e.from_status) : '—'} → {formatStatus(e.to_status)} ({new Date(e.created_at).toLocaleString()}){e.reason ? ` — ${e.reason}` : ''}</li>)}</ul>
                     <p><strong>Requirements</strong></p>
-                    <ul style={{ fontSize: '0.85rem', paddingLeft: '1.2rem' }}>{reviewReqs.map((r) => <li key={r.id}>{r.label} ({r.kind}) <span style={badge(r.status)}>{r.status}</span></li>)}</ul>
+                    <ul style={{ fontSize: '0.85rem', paddingLeft: '1.2rem' }}>{reviewReqs.map((r) => <li key={r.id}>{r.label} ({formatStatus(r.kind)}) <span style={badge(r.status)}>{formatStatus(r.status)}</span></li>)}</ul>
                     <button type="button" disabled={acting} onClick={() => approve(a.id)} style={{ ...btnPrimary('#2E7D32'), marginTop: '0.5rem' }}>Approve</button>
                     <label style={{ ...lbl, marginTop: '0.75rem', display: 'block' }}>Rejection reason *
                       <textarea value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} rows={2} style={inp} />
