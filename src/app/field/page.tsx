@@ -10,6 +10,19 @@ import {
 
 const NAVY = '#1B2D4F';
 const BLUE = '#2E6DA4';
+const LIGHT_BLUE = '#D6E4F0';
+
+const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
+  draft: { bg: '#eeeeee', color: '#888888' },
+  open: { bg: LIGHT_BLUE, color: BLUE },
+  in_review: { bg: '#fff3e0', color: '#E65100' },
+  closed: { bg: '#e8f5e9', color: '#2E7D32' },
+  pending: { bg: '#eeeeee', color: '#888888' },
+  in_progress: { bg: LIGHT_BLUE, color: BLUE },
+  submitted: { bg: '#fff3e0', color: '#E65100' },
+  approved: { bg: '#e8f5e9', color: '#2E7D32' },
+  rejected: { bg: '#ffebee', color: '#C62828' },
+};
 
 type QcCase = {
   id: string;
@@ -21,33 +34,23 @@ type QcCase = {
   barcode_sku: string | null;
   time_window_start: string | null;
   time_window_end: string | null;
+  geo_lat: number | null;
+  geo_lng: number | null;
+  geo_radius_m: number | null;
   status: string;
 };
 
-type Template = {
-  id: string;
-  kind: string;
-  label: string;
-  instructions: string | null;
-  is_mandatory?: boolean;
-};
-
-type Assignment = {
-  id: string;
-  qc_case_id: string;
-  status: string;
-  submitted_at: string | null;
-  accepted_at: string | null;
-};
-
+type Template = { id: string; kind: string; label: string; instructions: string | null };
+type Assignment = { id: string; qc_case_id: string; status: string; submitted_at: string | null };
 type Requirement = {
   id: string;
   label: string;
   kind: string;
   is_mandatory: boolean;
   status: string;
-  instructions: string | null;
 };
+type CheckIn = { id: string; recorded_at: string; is_within_geofence: boolean | null };
+type EvidenceFile = { id: string; assignment_evidence_requirement_id: string; storage_path: string | null; upload_status: string };
 
 async function errorFromResponse(res: Response): Promise<string> {
   try {
@@ -61,35 +64,37 @@ async function errorFromResponse(res: Response): Promise<string> {
   return res.statusText || `Request failed (${res.status})`;
 }
 
-function statusBadgeStyle(status: string): React.CSSProperties {
-  const map: Record<string, { bg: string; color: string }> = {
-    draft: { bg: '#e2e8f0', color: '#475569' },
-    open: { bg: '#dbeafe', color: '#1d4ed8' },
-    in_review: { bg: '#fef3c7', color: '#b45309' },
-    closed: { bg: '#d1fae5', color: '#047857' },
-    pending: { bg: '#e2e8f0', color: '#475569' },
-    in_progress: { bg: '#dbeafe', color: '#1d4ed8' },
-    submitted: { bg: '#fef3c7', color: '#b45309' },
-    approved: { bg: '#d1fae5', color: '#047857' },
-    rejected: { bg: '#fee2e2', color: '#b91c1c' },
-  };
-  const s = map[status] ?? { bg: '#e2e8f0', color: '#475569' };
+function badge(status: string): React.CSSProperties {
+  const s = STATUS_COLORS[status] ?? { bg: '#eee', color: '#666' };
   return {
     display: 'inline-block',
-    padding: '0.2rem 0.5rem',
-    borderRadius: '4px',
-    fontSize: '0.75rem',
-    fontWeight: 600,
+    padding: '0.15rem 0.5rem',
+    borderRadius: 4,
+    fontSize: '0.7rem',
+    fontWeight: 700,
     background: s.bg,
     color: s.color,
+    textTransform: 'uppercase',
+    marginRight: 4,
   };
 }
 
 function formatWindow(start: string | null, end: string | null): string {
   if (!start && !end) return '—';
-  const fmt = (v: string) => new Date(v).toLocaleString();
-  if (start && end) return `${fmt(start)} → ${fmt(end)}`;
-  return start ? fmt(start) : end ? fmt(end) : '—';
+  const f = (v: string) => new Date(v).toLocaleString();
+  if (start && end) return `${f(start)} → ${f(end)}`;
+  return start ? f(start) : end ? f(end) : '—';
+}
+
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 export default function FieldPage() {
@@ -97,18 +102,21 @@ export default function FieldPage() {
   const [templatesByCase, setTemplatesByCase] = useState<Record<string, Template[]>>({});
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [casesById, setCasesById] = useState<Record<string, QcCase>>({});
-  const [requirementsByAssignment, setRequirementsByAssignment] = useState<
-    Record<string, Requirement[]>
-  >({});
+  const [reqsByAssignment, setReqsByAssignment] = useState<Record<string, Requirement[]>>({});
+  const [checkInsByAssignment, setCheckInsByAssignment] = useState<Record<string, CheckIn[]>>({});
+  const [filesByAssignment, setFilesByAssignment] = useState<Record<string, EvidenceFile[]>>({});
   const [notesByAssignment, setNotesByAssignment] = useState<Record<string, string>>({});
 
   const [casesError, setCasesError] = useState<string | null>(null);
   const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loadingCases, setLoadingCases] = useState(true);
   const [loadingAssignments, setLoadingAssignments] = useState(true);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
+  const [checkingInId, setCheckingInId] = useState<string | null>(null);
+  const [uploadingReqId, setUploadingReqId] = useState<string | null>(null);
 
   const fetchOpenCases = useCallback(async () => {
     setLoadingCases(true);
@@ -128,23 +136,17 @@ export default function FieldPage() {
       }
       const cases = (await res.json()) as QcCase[];
       setOpenCases(cases);
-
-      const templateMap: Record<string, Template[]> = {};
+      const tmap: Record<string, Template[]> = {};
       for (const c of cases) {
-        const tRes = await fetch(
+        const tr = await fetch(
           `/api/qc-cases/${c.id}/templates?organization_id=${encodeURIComponent(ORGANIZATION_ID)}`,
         );
-        if (tRes.ok) {
-          templateMap[c.id] = (await tRes.json()) as Template[];
-        } else {
-          templateMap[c.id] = [];
-        }
+        tmap[c.id] = tr.ok ? ((await tr.json()) as Template[]) : [];
       }
-      setTemplatesByCase(templateMap);
-    } catch (err) {
+      setTemplatesByCase(tmap);
+    } catch (e) {
       setOpenCases([]);
-      setTemplatesByCase({});
-      setCasesError(err instanceof Error ? err.message : 'Failed to load cases');
+      setCasesError(e instanceof Error ? e.message : 'Failed to load cases');
     } finally {
       setLoadingCases(false);
     }
@@ -154,47 +156,39 @@ export default function FieldPage() {
     setLoadingAssignments(true);
     setAssignmentsError(null);
     try {
-      const params = new URLSearchParams({
-        organization_id: ORGANIZATION_ID,
-        assigned_to: FIELD_WORKER_ID,
-      });
-      const res = await fetch(`/api/assignments?${params}`);
+      const res = await fetch(
+        `/api/assignments?organization_id=${encodeURIComponent(ORGANIZATION_ID)}&assigned_to=${FIELD_WORKER_ID}`,
+      );
       if (!res.ok) {
         setAssignments([]);
-        setCasesById({});
-        setRequirementsByAssignment({});
         setAssignmentsError(await errorFromResponse(res));
         return;
       }
       const assigns = (await res.json()) as Assignment[];
       setAssignments(assigns);
-
-      const caseMap: Record<string, QcCase> = {};
-      const reqMap: Record<string, Requirement[]> = {};
+      const cmap: Record<string, QcCase> = {};
+      const rmap: Record<string, Requirement[]> = {};
+      const chimap: Record<string, CheckIn[]> = {};
+      const fmap: Record<string, EvidenceFile[]> = {};
 
       for (const a of assigns) {
-        if (!caseMap[a.qc_case_id]) {
-          const caseRes = await fetch(`/api/qc-cases/${a.qc_case_id}`);
-          if (caseRes.ok) {
-            caseMap[a.qc_case_id] = (await caseRes.json()) as QcCase;
-          }
+        if (!cmap[a.qc_case_id]) {
+          const cr = await fetch(`/api/qc-cases/${a.qc_case_id}`);
+          if (cr.ok) cmap[a.qc_case_id] = (await cr.json()) as QcCase;
         }
-        if (a.status === 'in_progress') {
-          const reqRes = await fetch(`/api/assignments/${a.id}/requirements`);
-          if (reqRes.ok) {
-            reqMap[a.id] = (await reqRes.json()) as Requirement[];
-          } else {
-            reqMap[a.id] = [];
-          }
-        }
+        const rr = await fetch(`/api/assignments/${a.id}/requirements`);
+        rmap[a.id] = rr.ok ? ((await rr.json()) as Requirement[]) : [];
+        const fr = await fetch(
+          `/api/evidence-files?organization_id=${encodeURIComponent(ORGANIZATION_ID)}&assignment_id=${a.id}`,
+        );
+        fmap[a.id] = fr.ok ? ((await fr.json()) as EvidenceFile[]) : [];
       }
-      setCasesById(caseMap);
-      setRequirementsByAssignment(reqMap);
-    } catch (err) {
-      setAssignments([]);
-      setCasesById({});
-      setRequirementsByAssignment({});
-      setAssignmentsError(err instanceof Error ? err.message : 'Failed to load assignments');
+      setCasesById(cmap);
+      setReqsByAssignment(rmap);
+      setFilesByAssignment(fmap);
+      setCheckInsByAssignment(chimap);
+    } catch (e) {
+      setAssignmentsError(e instanceof Error ? e.message : 'Failed to load assignments');
     } finally {
       setLoadingAssignments(false);
     }
@@ -210,6 +204,7 @@ export default function FieldPage() {
 
   async function handleAccept(qcCaseId: string) {
     setActionError(null);
+    setSuccessMsg(null);
     setAcceptingId(qcCaseId);
     try {
       const res = await fetch('/api/assignments', {
@@ -226,11 +221,99 @@ export default function FieldPage() {
         setActionError(await errorFromResponse(res));
         return;
       }
+      setSuccessMsg('Assignment accepted — requirements snapshotted');
       await refresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to accept case');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Accept failed');
     } finally {
       setAcceptingId(null);
+    }
+  }
+
+  async function handleCheckIn(assignmentId: string, qcCase: QcCase | undefined) {
+    setActionError(null);
+    setCheckingInId(assignmentId);
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true });
+      });
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+      const accuracy = position.coords.accuracy;
+      let distance: number | null = null;
+      let within: boolean | null = null;
+      if (qcCase?.geo_lat != null && qcCase?.geo_lng != null) {
+        distance = haversineM(lat, lng, Number(qcCase.geo_lat), Number(qcCase.geo_lng));
+        if (qcCase.geo_radius_m != null) {
+          within = distance <= qcCase.geo_radius_m;
+        }
+      }
+      const res = await fetch('/api/check-ins', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organization_id: ORGANIZATION_ID,
+          assignment_id: assignmentId,
+          lat,
+          lng,
+          recorded_at: new Date().toISOString(),
+          accuracy_m: accuracy,
+          distance_from_target_m: distance,
+          geo_radius_m: qcCase?.geo_radius_m ?? null,
+          is_within_geofence: within,
+          device_info: navigator.userAgent,
+        }),
+      });
+      if (!res.ok) {
+        setActionError(await errorFromResponse(res));
+        return;
+      }
+      const row = (await res.json()) as CheckIn;
+      setCheckInsByAssignment((p) => ({
+        ...p,
+        [assignmentId]: [...(p[assignmentId] ?? []), row],
+      }));
+      setSuccessMsg(within === false ? 'Check-in recorded — outside geofence' : 'Check-in recorded');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Check-in failed — enable location access');
+    } finally {
+      setCheckingInId(null);
+    }
+  }
+
+  async function handleEvidenceUpload(
+    assignmentId: string,
+    requirementId: string,
+    file: File,
+  ) {
+    setUploadingReqId(requirementId);
+    setActionError(null);
+    try {
+      const res = await fetch('/api/evidence-files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organization_id: ORGANIZATION_ID,
+          assignment_id: assignmentId,
+          assignment_evidence_requirement_id: requirementId,
+          uploaded_by: FIELD_WORKER_ID,
+          storage_path: `pending/${assignmentId}/${file.name}`,
+          mime_type: file.type || null,
+          byte_size: file.size,
+          captured_at: new Date().toISOString(),
+          upload_status: 'uploaded',
+        }),
+      });
+      if (!res.ok) {
+        setActionError(await errorFromResponse(res));
+        return;
+      }
+      setSuccessMsg(`Evidence uploaded: ${file.name}`);
+      await fetchAssignments();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setUploadingReqId(null);
     }
   }
 
@@ -252,258 +335,172 @@ export default function FieldPage() {
         setActionError(await errorFromResponse(res));
         return;
       }
+      setSuccessMsg('Submitted for review');
       await refresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to submit');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Submit failed');
     } finally {
       setSubmittingId(null);
     }
   }
 
   return (
-    <main style={{ minHeight: '100vh', background: '#f8fafc', fontFamily: 'system-ui, sans-serif' }}>
-      <header
-        style={{
-          background: NAVY,
-          color: '#fff',
-          padding: '1rem 2rem',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <div>
-          <strong style={{ fontSize: '1.1rem' }}>ProofLayer AI</strong>
-          <span style={{ marginLeft: '1rem', opacity: 0.85, fontSize: '0.9rem' }}>
-            Field Worker
-          </span>
+    <div style={{ minHeight: '100vh', background: '#f4f7fb', fontFamily: 'system-ui, sans-serif' }}>
+      <header style={{ background: NAVY, color: '#fff', padding: '0.85rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+          <div style={{ width: 36, height: 36, background: BLUE, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.85rem' }}>PL</div>
+          <div>
+            <div style={{ fontWeight: 700 }}>ProofLayer AI</div>
+            <div style={{ fontSize: '0.75rem', opacity: 0.85 }}>Field Worker</div>
+          </div>
         </div>
-        <Link href="/" style={{ color: '#93c5fd', fontSize: '0.9rem' }}>
-          Sign out
-        </Link>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ width: 32, height: 32, borderRadius: '50%', background: BLUE, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 700 }}>FW</div>
+            <span style={{ fontSize: '0.85rem' }}>Field Worker</span>
+          </div>
+          <Link href="/" style={{ color: '#93c5fd', fontSize: '0.85rem' }}>Sign out</Link>
+        </div>
       </header>
 
-      <div style={{ maxWidth: '960px', margin: '0 auto', padding: '1.5rem 2rem 3rem' }}>
-        {actionError && <p style={errorStyle}>{actionError}</p>}
+      <div style={{ maxWidth: 1000, margin: '0 auto', padding: '1.25rem 1.5rem 3rem' }}>
+        {successMsg && <p style={{ background: '#e8f5e9', color: '#2E7D32', padding: '0.75rem', borderRadius: 8, marginBottom: '1rem' }}>{successMsg}</p>}
+        {actionError && <p style={{ color: '#C62828', marginBottom: '1rem' }}>{actionError}</p>}
 
-        <section style={cardStyle}>
-          <h2 style={sectionTitle}>Available Cases</h2>
-          {casesError && <p style={errorStyle}>{casesError}</p>}
+        <section style={card}>
+          <h2 style={h2}>Available Cases</h2>
+          {casesError && <p style={err}>{casesError}</p>}
           {loadingCases && !casesError && <p>Loading...</p>}
-          {!loadingCases && !casesError && openCases.length === 0 && (
-            <p>No open cases available.</p>
-          )}
+          {!loadingCases && !casesError && openCases.length === 0 && <p>No open cases available.</p>}
           {openCases.map((c) => (
-            <div key={c.id} style={innerCardStyle}>
-              <strong style={{ fontSize: '1.05rem', color: NAVY }}>{c.title}</strong>
-              <p style={{ margin: '0.35rem 0', color: '#64748b', fontSize: '0.9rem' }}>
-                {[c.store_name, c.store_address].filter(Boolean).join(' · ') || '—'}
-              </p>
-              <p style={{ margin: '0 0 0.25rem', color: '#64748b', fontSize: '0.85rem' }}>
-                {[c.item_name, c.barcode_sku].filter(Boolean).join(' · ') || '—'}
-              </p>
-              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', color: '#94a3b8' }}>
-                {formatWindow(c.time_window_start, c.time_window_end)}
-              </p>
-              {c.instructions && (
-                <p style={{ fontSize: '0.9rem', margin: '0.5rem 0' }}>
-                  <strong>Brief:</strong> {c.instructions}
-                </p>
-              )}
-              <p style={{ fontSize: '0.85rem', margin: '0.5rem 0 0.25rem' }}>
-                <strong>Evidence required:</strong>
-              </p>
-              {(templatesByCase[c.id] ?? []).length === 0 ? (
-                <p style={{ fontSize: '0.85rem', color: '#64748b' }}>None listed</p>
-              ) : (
-                <ul style={{ margin: '0.25rem 0', paddingLeft: '1.25rem', fontSize: '0.85rem' }}>
-                  {(templatesByCase[c.id] ?? []).map((t) => (
-                    <li key={t.id}>
-                      <span style={statusBadgeStyle(t.kind)}>{t.kind}</span> {t.label}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <button
-                type="button"
-                onClick={() => handleAccept(c.id)}
-                disabled={acceptingId === c.id}
-                style={{ ...primaryBtn(BLUE), marginTop: '0.75rem' }}
-              >
+            <div key={c.id} style={listCard}>
+              <strong style={{ color: NAVY, fontSize: '1.05rem' }}>{c.title}</strong>
+              <p style={{ margin: '0.35rem 0', color: '#555', fontSize: '0.9rem' }}>{[c.store_name, c.store_address].filter(Boolean).join(' · ')}</p>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: '#777' }}>{[c.item_name, c.barcode_sku].filter(Boolean).join(' · ')}</p>
+              <p style={{ margin: '0.25rem 0', fontSize: '0.8rem', color: '#999' }}>{formatWindow(c.time_window_start, c.time_window_end)}</p>
+              {c.instructions && <p style={{ fontSize: '0.9rem', margin: '0.5rem 0' }}><strong>Brief:</strong> {c.instructions}</p>}
+              <p style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}><strong>Evidence required:</strong></p>
+              <ul style={{ margin: '0.25rem 0', paddingLeft: '1.2rem', fontSize: '0.85rem' }}>
+                {(templatesByCase[c.id] ?? []).map((t) => (
+                  <li key={t.id}><span style={badge(t.kind)}>{t.kind}</span> {t.label}</li>
+                ))}
+              </ul>
+              <button type="button" disabled={acceptingId === c.id} onClick={() => handleAccept(c.id)} style={{ ...btnPrimary(BLUE), marginTop: '0.75rem' }}>
                 {acceptingId === c.id ? 'Accepting…' : 'Accept'}
               </button>
             </div>
           ))}
         </section>
 
-        <section style={{ ...cardStyle, marginTop: '1.5rem' }}>
-          <h2 style={sectionTitle}>My Active Assignments</h2>
-          {assignmentsError && <p style={errorStyle}>{assignmentsError}</p>}
+        <section style={{ ...card, marginTop: '1.25rem' }}>
+          <h2 style={h2}>My Active Assignments</h2>
+          {assignmentsError && <p style={err}>{assignmentsError}</p>}
           {loadingAssignments && !assignmentsError && <p>Loading...</p>}
-          {!loadingAssignments && !assignmentsError && assignments.length === 0 && (
-            <p>No assignments yet.</p>
-          )}
+          {!loadingAssignments && !assignmentsError && assignments.length === 0 && <p>No assignments yet.</p>}
           {assignments.map((a) => {
             const qc = casesById[a.qc_case_id];
-            const reqs = requirementsByAssignment[a.id] ?? [];
+            const reqs = reqsByAssignment[a.id] ?? [];
+            const files = filesByAssignment[a.id] ?? [];
+            const checkIns = checkInsByAssignment[a.id] ?? [];
             return (
-              <div key={a.id} style={innerCardStyle}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div key={a.id} style={listCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <strong style={{ color: NAVY }}>{qc?.title ?? a.qc_case_id}</strong>
-                  <span style={statusBadgeStyle(a.status)}>{a.status}</span>
+                  <span style={badge(a.status)}>{a.status}</span>
                 </div>
                 {qc && (
                   <>
-                    <p style={{ margin: '0.35rem 0', fontSize: '0.9rem', color: '#64748b' }}>
-                      {[qc.store_name, qc.store_address].filter(Boolean).join(' · ')}
-                    </p>
-                    <p style={{ margin: '0 0 0.25rem', fontSize: '0.85rem', color: '#64748b' }}>
-                      {[qc.item_name, qc.barcode_sku].filter(Boolean).join(' · ')}
-                    </p>
-                    <p style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                      {formatWindow(qc.time_window_start, qc.time_window_end)}
-                    </p>
+                    <p style={{ margin: '0.35rem 0', fontSize: '0.9rem', color: '#555' }}>{[qc.store_name, qc.store_address].filter(Boolean).join(' · ')}</p>
+                    <p style={{ margin: 0, fontSize: '0.85rem', color: '#777' }}>{[qc.item_name, qc.barcode_sku].filter(Boolean).join(' · ')}</p>
+                    <p style={{ fontSize: '0.8rem', color: '#999' }}>{formatWindow(qc.time_window_start, qc.time_window_end)}</p>
                   </>
                 )}
 
                 {a.status === 'in_progress' && (
-                  <div style={{ marginTop: '0.75rem' }}>
-                    {qc?.instructions && (
-                      <p style={{ fontSize: '0.9rem' }}>
-                        <strong>Instructions:</strong> {qc.instructions}
-                      </p>
-                    )}
-                    <p style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>
-                      <strong>Evidence checklist</strong>
-                    </p>
-                    {reqs.length === 0 ? (
-                      <p style={{ fontSize: '0.85rem', color: '#64748b' }}>No requirements</p>
-                    ) : (
-                      <ul style={{ paddingLeft: 0, listStyle: 'none', margin: '0.5rem 0' }}>
-                        {reqs.map((r) => (
-                          <li
-                            key={r.id}
-                            style={{
-                              padding: '0.5rem',
-                              background: '#f8fafc',
-                              borderRadius: '6px',
-                              marginBottom: '0.35rem',
-                              fontSize: '0.85rem',
-                            }}
-                          >
-                            <span style={statusBadgeStyle(r.kind)}>{r.kind}</span>{' '}
-                            <strong>{r.label}</strong>
-                            {r.is_mandatory && (
-                              <span style={{ color: '#b45309', marginLeft: '0.35rem' }}>*</span>
-                            )}{' '}
-                            <span style={statusBadgeStyle(r.status)}>{r.status}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    <label style={labelStyle}>
-                      Submission notes
-                      <textarea
-                        value={notesByAssignment[a.id] ?? ''}
-                        onChange={(e) =>
-                          setNotesByAssignment((prev) => ({
-                            ...prev,
-                            [a.id]: e.target.value,
-                          }))
-                        }
-                        rows={2}
-                        style={inputStyle}
-                      />
+                  <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid #e0e0e0' }}>
+                    {qc?.instructions && <p style={{ fontSize: '0.9rem' }}><strong>Instructions:</strong> {qc.instructions}</p>}
+
+                    <div style={{ marginTop: '0.75rem', background: LIGHT_BLUE, padding: '0.75rem', borderRadius: 8 }}>
+                      <strong style={{ fontSize: '0.9rem', color: NAVY }}>Geo Check-in</strong>
+                      {qc?.geo_lat != null && (
+                        <p style={{ fontSize: '0.8rem', color: '#666', margin: '0.25rem 0' }}>
+                          Target: {qc.geo_lat}, {qc.geo_lng} · radius {qc.geo_radius_m ?? '—'}m
+                        </p>
+                      )}
+                      <button type="button" disabled={checkingInId === a.id} onClick={() => handleCheckIn(a.id, qc)} style={{ ...btnPrimary(NAVY), marginTop: '0.35rem' }}>
+                        {checkingInId === a.id ? 'Checking in…' : 'Record Check-in'}
+                      </button>
+                      {checkIns.length > 0 && (
+                        <ul style={{ fontSize: '0.8rem', margin: '0.5rem 0 0', paddingLeft: '1.2rem' }}>
+                          {checkIns.map((ci) => (
+                            <li key={ci.id}>{new Date(ci.recorded_at).toLocaleString()} {ci.is_within_geofence === true ? '✓ in geofence' : ci.is_within_geofence === false ? '✗ outside' : ''}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    <p style={{ fontSize: '0.9rem', marginTop: '0.75rem' }}><strong>Evidence checklist</strong></p>
+                    {reqs.map((r) => {
+                      const uploaded = files.filter((f) => f.assignment_evidence_requirement_id === r.id);
+                      return (
+                        <div key={r.id} style={{ background: '#fafbfc', padding: '0.65rem', borderRadius: 6, marginBottom: 6 }}>
+                          <span style={badge(r.kind)}>{r.kind}</span> <strong>{r.label}</strong>
+                          {r.is_mandatory && <span style={{ color: '#E65100' }}> *</span>}
+                          <span style={badge(r.status)}>{r.status}</span>
+                          {uploaded.length > 0 && <span style={{ fontSize: '0.75rem', color: '#2E7D32', marginLeft: 6 }}>{uploaded.length} file(s)</span>}
+                          <div style={{ marginTop: 6 }}>
+                            <label style={{ fontSize: '0.8rem', cursor: 'pointer' }}>
+                              <input
+                                type="file"
+                                accept={r.kind === 'photo' ? 'image/*' : r.kind === 'video' ? 'video/*' : '*/*'}
+                                style={{ fontSize: '0.8rem' }}
+                                disabled={uploadingReqId === r.id}
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0];
+                                  if (f) handleEvidenceUpload(a.id, r.id, f);
+                                  e.target.value = '';
+                                }}
+                              />
+                              {uploadingReqId === r.id ? ' Uploading…' : ' Upload evidence'}
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    <label style={lbl}>Submission notes
+                      <textarea value={notesByAssignment[a.id] ?? ''} onChange={(e) => setNotesByAssignment((p) => ({ ...p, [a.id]: e.target.value }))} rows={2} style={inp} />
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => handleSubmit(a.id)}
-                      disabled={submittingId === a.id}
-                      style={{ ...primaryBtn(NAVY), marginTop: '0.5rem' }}
-                    >
+                    <button type="button" disabled={submittingId === a.id} onClick={() => handleSubmit(a.id)} style={{ ...btnPrimary(BLUE), marginTop: '0.5rem' }}>
                       {submittingId === a.id ? 'Submitting…' : 'Submit for Review'}
                     </button>
                   </div>
                 )}
 
                 {a.status === 'submitted' && (
-                  <p style={{ marginTop: '0.75rem', color: '#b45309', fontWeight: 600 }}>
-                    Submitted — awaiting review
-                  </p>
+                  <p style={{ marginTop: '0.75rem', color: '#E65100', fontWeight: 600 }}>Submitted — awaiting review</p>
                 )}
-
                 {a.status === 'approved' && (
-                  <p style={{ marginTop: '0.75rem', color: '#047857', fontWeight: 600 }}>
-                    Approved — work complete
-                  </p>
+                  <p style={{ marginTop: '0.75rem', color: '#2E7D32', fontWeight: 600 }}>Approved — work complete</p>
                 )}
-
                 {a.status === 'rejected' && (
-                  <p style={{ marginTop: '0.75rem', color: '#b91c1c' }}>
-                    Rejected — check Available Cases above to accept a new assignment
-                  </p>
+                  <p style={{ marginTop: '0.75rem', color: '#C62828' }}>Rejected — accept a new case from Available Cases above</p>
                 )}
               </div>
             );
           })}
         </section>
       </div>
-    </main>
+    </div>
   );
 }
 
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '0.8rem',
-  fontWeight: 600,
-  color: NAVY,
-  marginTop: '0.75rem',
-};
-
-const inputStyle: React.CSSProperties = {
-  display: 'block',
-  width: '100%',
-  marginTop: '0.35rem',
-  padding: '0.55rem 0.75rem',
-  border: '1px solid #cbd5e1',
-  borderRadius: '6px',
-  fontSize: '0.9rem',
-  boxSizing: 'border-box',
-};
-
-const cardStyle: React.CSSProperties = {
-  background: '#fff',
-  borderRadius: '10px',
-  border: '1px solid #e2e8f0',
-  boxShadow: '0 2px 8px rgba(27, 45, 79, 0.06)',
-  padding: '1.25rem 1.5rem',
-};
-
-const innerCardStyle: React.CSSProperties = {
-  border: '1px solid #e2e8f0',
-  borderRadius: '8px',
-  padding: '1rem 1.25rem',
-  marginBottom: '0.75rem',
-  boxShadow: '0 1px 4px rgba(27, 45, 79, 0.04)',
-};
-
-const sectionTitle: React.CSSProperties = {
-  margin: '0 0 1rem',
-  fontSize: '1.15rem',
-  color: NAVY,
-};
-
-const errorStyle: React.CSSProperties = { color: '#b91c1c', marginBottom: '0.75rem' };
-
-function primaryBtn(bg: string): React.CSSProperties {
-  return {
-    padding: '0.55rem 1rem',
-    background: bg,
-    color: '#fff',
-    border: 'none',
-    borderRadius: '6px',
-    fontWeight: 600,
-    cursor: 'pointer',
-    fontSize: '0.9rem',
-  };
+const card: React.CSSProperties = { background: '#fff', borderRadius: 10, border: '1px solid #e0e0e0', boxShadow: '0 2px 8px rgba(27,45,79,0.06)', padding: '1.25rem' };
+const listCard: React.CSSProperties = { border: '1px solid #e0e0e0', borderRadius: 8, padding: '1rem', marginBottom: '0.65rem', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', background: '#fff' };
+const h2: React.CSSProperties = { margin: '0 0 1rem', color: NAVY, fontSize: '1.15rem' };
+const lbl: React.CSSProperties = { display: 'block', fontSize: '0.8rem', fontWeight: 600, color: NAVY, marginTop: '0.75rem' };
+const inp: React.CSSProperties = { display: 'block', width: '100%', marginTop: 4, padding: '0.5rem', border: '1px solid #ccc', borderRadius: 6, fontSize: '0.9rem', boxSizing: 'border-box' };
+const err: React.CSSProperties = { color: '#C62828' };
+function btnPrimary(bg: string): React.CSSProperties {
+  return { padding: '0.55rem 1rem', background: bg, color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' };
 }

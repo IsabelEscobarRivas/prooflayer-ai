@@ -4,13 +4,14 @@ import Link from 'next/link';
 
 const NAVY = '#1B2D4F';
 const BLUE = '#2E6DA4';
+const LIGHT_BLUE = '#D6E4F0';
 
 export default function Home() {
   return (
     <main
       style={{
         minHeight: '100vh',
-        background: 'linear-gradient(160deg, #f0f4f8 0%, #e2e8f0 100%)',
+        background: `linear-gradient(160deg, ${LIGHT_BLUE} 0%, #eef2f7 100%)`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -21,7 +22,7 @@ export default function Home() {
       <div
         style={{
           width: '100%',
-          maxWidth: '420px',
+          maxWidth: '480px',
           background: '#fff',
           borderRadius: '12px',
           boxShadow: '0 8px 32px rgba(27, 45, 79, 0.12)',
@@ -29,12 +30,12 @@ export default function Home() {
           border: '1px solid #e2e8f0',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.35rem' }}>
           <div
             style={{
-              width: '44px',
-              height: '44px',
-              background: BLUE,
+              width: '48px',
+              height: '48px',
+              background: NAVY,
               borderRadius: '8px',
               display: 'flex',
               alignItems: 'center',
@@ -46,31 +47,38 @@ export default function Home() {
           >
             PL
           </div>
-          <span style={{ fontSize: '1.35rem', fontWeight: 700, color: NAVY }}>ProofLayer AI</span>
+          <h1 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 700, color: NAVY }}>
+            ProofLayer AI
+          </h1>
         </div>
-        <p style={{ color: '#64748b', fontSize: '0.9rem', margin: '0 0 1.75rem 0' }}>
+        <p style={{ color: '#64748b', fontSize: '0.9rem', margin: '0 0 1.5rem 0' }}>
           Geospatial Verification Platform
         </p>
 
         <label style={labelStyle}>
           Email
-          <input type="email" placeholder="you@company.com" style={inputStyle} readOnly />
+          <input type="email" defaultValue="demo@prooflayer.ai" style={inputStyle} readOnly />
         </label>
-        <label style={{ ...labelStyle, marginTop: '1rem' }}>
+        <label style={{ ...labelStyle, marginTop: '0.85rem' }}>
           Password
-          <input type="password" placeholder="••••••••" style={inputStyle} readOnly />
+          <input type="password" defaultValue="demo123" style={inputStyle} readOnly />
         </label>
-
-        <p style={{ color: '#94a3b8', fontSize: '0.75rem', margin: '1.25rem 0 1rem', textAlign: 'center' }}>
-          Select role to continue (demo — no authentication)
+        <p style={{ color: '#64748b', fontSize: '0.8rem', margin: '0.5rem 0 1.25rem' }}>
+          Demo password: demo123
         </p>
 
         <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <Link href="/enterprise" style={{ ...roleBtnStyle, background: NAVY }}>
-            Enterprise Manager
+          <Link href="/enterprise" style={roleCardStyle}>
+            <strong style={{ color: NAVY, fontSize: '0.95rem' }}>Enterprise Manager</strong>
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.4 }}>
+              Dashboard · Case creation · Reports
+            </p>
           </Link>
-          <Link href="/field" style={{ ...roleBtnStyle, background: BLUE }}>
-            Field Worker
+          <Link href="/field" style={roleCardStyle}>
+            <strong style={{ color: NAVY, fontSize: '0.95rem' }}>Field Worker</strong>
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.4 }}>
+              Task list · Geo check-in · Evidence upload
+            </p>
           </Link>
         </div>
       </div>
@@ -96,13 +104,13 @@ const inputStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 };
 
-const roleBtnStyle: React.CSSProperties = {
+const roleCardStyle: React.CSSProperties = {
   flex: 1,
-  padding: '0.75rem 0.5rem',
-  color: '#fff',
+  padding: '1rem',
+  background: LIGHT_BLUE,
+  border: `2px solid ${BLUE}`,
+  borderRadius: '10px',
   textDecoration: 'none',
-  borderRadius: '8px',
-  fontSize: '0.8rem',
-  fontWeight: 600,
-  textAlign: 'center',
+  display: 'block',
+  transition: 'box-shadow 0.15s',
 };
