@@ -48,7 +48,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { organization_id, title, description, status, created_by } = body;
+    const { organization_id, title, description, instructions, due_at, status, created_by } =
+      body;
 
     if (!organization_id || !title || !created_by) {
       return NextResponse.json(
@@ -64,6 +65,8 @@ export async function POST(req: NextRequest) {
         organization_id,
         title,
         description: description ?? null,
+        instructions: instructions ?? null,
+        due_at: due_at ?? null,
         status: status ?? 'draft',
         created_by,
       })
