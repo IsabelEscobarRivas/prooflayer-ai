@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { signOut } from '@/lib/auth/sign-out';
 import { createBrowserClient } from '@/lib/supabase/client';
@@ -110,6 +111,7 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 }
 
 export default function FieldPage() {
+  const router = useRouter();
   const [openCases, setOpenCases] = useState<QcCase[]>([]);
   const [templatesByCase, setTemplatesByCase] = useState<Record<string, Template[]>>({});
   const [assignments, setAssignments] = useState<Assignment[]>([]);
@@ -141,16 +143,24 @@ export default function FieldPage() {
         window.location.href = '/';
         return;
       }
-      setUserId(user.id);
       const profileRes = await fetch(`/api/users/${user.id}`);
-      if (profileRes.ok) {
-        const profile = (await profileRes.json()) as { full_name: string | null; email: string };
-        setUserLabel(profile.full_name ?? profile.email);
-      } else {
-        setUserLabel(user.email ?? 'Field Worker');
+      if (!profileRes.ok) {
+        window.location.href = '/';
+        return;
       }
+      const profile = (await profileRes.json()) as {
+        full_name: string | null;
+        email: string;
+        role: string;
+      };
+      if (profile.role !== 'field_worker') {
+        router.push('/enterprise');
+        return;
+      }
+      setUserId(user.id);
+      setUserLabel(profile.full_name ?? profile.email);
     })();
-  }, []);
+  }, [router]);
 
   const fetchOpenCases = useCallback(async () => {
     setLoadingCases(true);

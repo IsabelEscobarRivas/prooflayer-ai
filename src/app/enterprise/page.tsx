@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { signOut } from '@/lib/auth/sign-out';
 import { createBrowserClient } from '@/lib/supabase/client';
@@ -128,6 +129,7 @@ function toLocalDatetimeValue(iso?: string): string {
 }
 
 export default function EnterprisePage() {
+  const router = useRouter();
   const [formOpen, setFormOpen] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -184,16 +186,24 @@ export default function EnterprisePage() {
         window.location.href = '/';
         return;
       }
-      setUserId(user.id);
       const profileRes = await fetch(`/api/users/${user.id}`);
-      if (profileRes.ok) {
-        const profile = (await profileRes.json()) as { full_name: string | null; email: string };
-        setUserLabel(profile.full_name ?? profile.email);
-      } else {
-        setUserLabel(user.email ?? 'Enterprise Manager');
+      if (!profileRes.ok) {
+        window.location.href = '/';
+        return;
       }
+      const profile = (await profileRes.json()) as {
+        full_name: string | null;
+        email: string;
+        role: string;
+      };
+      if (profile.role !== 'enterprise') {
+        router.push('/field');
+        return;
+      }
+      setUserId(user.id);
+      setUserLabel(profile.full_name ?? profile.email);
     })();
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (!timeStart) return;
