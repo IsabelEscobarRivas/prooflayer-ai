@@ -3,8 +3,9 @@ import { validateAssignmentOrganization } from '@/lib/api/assignments';
 import { appendAssignmentEvent, snapshotEvidenceRequirements } from '@/lib/api/operational';
 import {
   dbUnavailableError,
+  getSessionIdentity,
   mapPostgresError,
-  requireOrganizationId,
+  requireRole,
 } from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
@@ -12,8 +13,9 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const organizationId = requireOrganizationId(req.nextUrl.searchParams);
-    if (organizationId instanceof NextResponse) return organizationId;
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
 
     const qcCaseId = req.nextUrl.searchParams.get('qc_case_id')?.trim();
     const assignedTo = req.nextUrl.searchParams.get('assigned_to')?.trim();
@@ -36,29 +38,26 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const {
-      organization_id,
-      qc_case_id,
-      assigned_to,
-      assigned_by,
-      status,
-      due_at,
-    } = body;
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { userId, organizationId, userRole } = session;
 
-    if (!organization_id || !qc_case_id || !assigned_to || !assigned_by) {
-      return NextResponse.json(
-        {
-          error:
-            'organization_id, qc_case_id, assigned_to, and assigned_by are required',
-        },
-        { status: 400 },
-      );
+    const forbidden = requireRole({ userId, organizationId, userRole }, 'field_worker');
+    if (forbidden) return forbidden;
+
+    const body = await req.json();
+    const { qc_case_id, status, due_at } = body;
+
+    if (!qc_case_id) {
+      return NextResponse.json({ error: 'qc_case_id is required' }, { status: 400 });
     }
+
+    const assigned_to = userId;
+    const assigned_by = userId;
 
     const db = getProoflayerDb();
     const validation = await validateAssignmentOrganization(db, {
-      organization_id,
+      organization_id: organizationId,
       qc_case_id,
       assigned_to,
       assigned_by,
@@ -71,7 +70,7 @@ export async function POST(req: NextRequest) {
     const { data: created, error } = await db
       .from('assignments')
       .insert({
-        organization_id,
+        organization_id: organizationId,
         qc_case_id,
         assigned_to,
         assigned_by,
@@ -100,7 +99,7 @@ export async function POST(req: NextRequest) {
       event_type: 'accepted',
       from_status: 'pending',
       to_status: 'in_progress',
-      actor_id: assigned_to,
+      actor_id: userId,
     });
 
     return NextResponse.json(assignment, { status: 201 });

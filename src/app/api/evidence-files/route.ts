@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError, requireOrganizationId } from '@/lib/api/http';
+import {
+  dbUnavailableError,
+  getSessionIdentity,
+  mapPostgresError,
+  requireRole,
+} from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const organizationId = requireOrganizationId(req.nextUrl.searchParams);
-    if (organizationId instanceof NextResponse) return organizationId;
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
 
     const assignmentId = req.nextUrl.searchParams.get('assignment_id')?.trim();
 
@@ -28,12 +34,17 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { userId, organizationId, userRole } = session;
+
+    const forbidden = requireRole({ userId, organizationId, userRole }, 'field_worker');
+    if (forbidden) return forbidden;
+
     const body = await req.json();
     const {
-      organization_id,
       assignment_id,
       assignment_evidence_requirement_id,
-      uploaded_by,
       storage_path,
       mime_type,
       byte_size,
@@ -42,16 +53,10 @@ export async function POST(req: NextRequest) {
       upload_status,
     } = body;
 
-    if (
-      !organization_id ||
-      !assignment_id ||
-      !assignment_evidence_requirement_id ||
-      !uploaded_by
-    ) {
+    if (!assignment_id || !assignment_evidence_requirement_id) {
       return NextResponse.json(
         {
-          error:
-            'organization_id, assignment_id, assignment_evidence_requirement_id, and uploaded_by are required',
+          error: 'assignment_id and assignment_evidence_requirement_id are required',
         },
         { status: 400 },
       );
@@ -61,10 +66,10 @@ export async function POST(req: NextRequest) {
     const { data, error } = await db
       .from('evidence_files')
       .insert({
-        organization_id,
+        organization_id: organizationId,
         assignment_id,
         assignment_evidence_requirement_id,
-        uploaded_by,
+        uploaded_by: userId,
         storage_path: storage_path ?? null,
         mime_type: mime_type ?? null,
         byte_size: byte_size ?? null,

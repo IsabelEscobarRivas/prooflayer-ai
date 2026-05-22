@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError } from '@/lib/api/http';
+import { dbUnavailableError, getSessionIdentity, mapPostgresError } from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
@@ -23,6 +23,10 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string; rid: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
+
     const { id: assignmentId, rid } = await params;
     const body = await req.json();
 
@@ -47,11 +51,23 @@ export async function PATCH(
     }
 
     const db = getProoflayerDb();
+
+    const { data: assignment, error: assignErr } = await db
+      .from('assignments')
+      .select('id')
+      .eq('id', assignmentId)
+      .eq('organization_id', organizationId)
+      .maybeSingle();
+
+    if (assignErr) throw assignErr;
+    if (!assignment) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
     const { data, error } = await db
       .from('assignment_evidence_requirements')
       .update({ status: 'waived' })
       .eq('id', rid)
       .eq('assignment_id', assignmentId)
+      .eq('organization_id', organizationId)
       .select('*')
       .single();
 

@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError } from '@/lib/api/http';
+import {
+  dbUnavailableError,
+  getSessionIdentity,
+  mapPostgresError,
+  requireRole,
+} from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
@@ -9,13 +14,16 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { userId, organizationId, userRole } = session;
+
+    const forbidden = requireRole({ userId, organizationId, userRole }, 'enterprise');
+    if (forbidden) return forbidden;
+
     const { id } = await params;
     const body = await req.json();
-    const { actor_id, reason } = body;
-
-    if (!actor_id) {
-      return NextResponse.json({ error: 'actor_id is required' }, { status: 400 });
-    }
+    const { reason } = body;
 
     if (!reason || typeof reason !== 'string' || !reason.trim()) {
       return NextResponse.json({ error: 'reason is required' }, { status: 400 });
@@ -27,6 +35,7 @@ export async function PATCH(
       .from('assignments')
       .select('*')
       .eq('id', id)
+      .eq('organization_id', organizationId)
       .maybeSingle();
 
     if (fetchErr) throw fetchErr;
@@ -61,7 +70,7 @@ export async function PATCH(
       event_type: 'rejected',
       from_status: 'submitted',
       to_status: 'rejected',
-      actor_id,
+      actor_id: userId,
       reason: reason.trim(),
     });
 

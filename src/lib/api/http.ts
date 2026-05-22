@@ -1,13 +1,28 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
 export const IMMUTABLE_FIELDS = ['id', 'created_at', 'created_by', 'organization_id'] as const;
 
-export function requireOrganizationId(searchParams: URLSearchParams): string | NextResponse {
-  const organizationId = searchParams.get('organization_id')?.trim();
-  if (!organizationId) {
-    return NextResponse.json({ error: 'organization_id is required' }, { status: 400 });
+export type SessionIdentity = {
+  userId: string;
+  organizationId: string;
+  userRole: string;
+};
+
+export function getSessionIdentity(req: NextRequest): SessionIdentity | NextResponse {
+  const userId = req.headers.get('x-user-id');
+  const organizationId = req.headers.get('x-organization-id');
+  const userRole = req.headers.get('x-user-role');
+  if (!userId || !organizationId || !userRole) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  return organizationId;
+  return { userId, organizationId, userRole };
+}
+
+export function requireRole(identity: SessionIdentity, role: string): NextResponse | null {
+  if (identity.userRole !== role) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+  return null;
 }
 
 export function rejectImmutableFields(body: Record<string, unknown>): NextResponse | null {

@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError, requireOrganizationId } from '@/lib/api/http';
+import { dbUnavailableError, getSessionIdentity, mapPostgresError } from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const organizationId = requireOrganizationId(req.nextUrl.searchParams);
-    if (organizationId instanceof NextResponse) return organizationId;
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
 
     const db = getProoflayerDb();
     const { data, error } = await db
@@ -25,14 +26,15 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { id, organization_id, email, full_name, role } = body;
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
 
-    if (!id || !organization_id || !email || !role) {
-      return NextResponse.json(
-        { error: 'id, organization_id, email, and role are required' },
-        { status: 400 },
-      );
+    const body = await req.json();
+    const { id, email, full_name, role } = body;
+
+    if (!id || !email || !role) {
+      return NextResponse.json({ error: 'id, email, and role are required' }, { status: 400 });
     }
 
     if (role !== 'enterprise' && role !== 'field_worker') {
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest) {
       .from('users')
       .insert({
         id,
-        organization_id,
+        organization_id: organizationId,
         email,
         full_name: full_name ?? null,
         role,

@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError } from '@/lib/api/http';
+import { dbUnavailableError, getSessionIdentity, mapPostgresError } from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+
     const body = await req.json();
     const { name, slug } = body;
 

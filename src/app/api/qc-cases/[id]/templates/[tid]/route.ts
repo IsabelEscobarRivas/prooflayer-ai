@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError } from '@/lib/api/http';
+import { dbUnavailableError, getSessionIdentity, mapPostgresError } from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
@@ -29,6 +29,10 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string; tid: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
+
     const { id: qcCaseId, tid } = await params;
     const body = await req.json();
 
@@ -52,6 +56,7 @@ export async function PATCH(
       .update(updates)
       .eq('id', tid)
       .eq('qc_case_id', qcCaseId)
+      .eq('organization_id', organizationId)
       .select('*')
       .single();
 
@@ -65,10 +70,14 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string; tid: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
+
     const { id: qcCaseId, tid } = await params;
     const db = getProoflayerDb();
 
@@ -76,6 +85,7 @@ export async function DELETE(
       .from('qc_cases')
       .select('status')
       .eq('id', qcCaseId)
+      .eq('organization_id', organizationId)
       .maybeSingle();
 
     if (caseErr) throw caseErr;
@@ -92,7 +102,8 @@ export async function DELETE(
       .from('case_evidence_templates')
       .delete()
       .eq('id', tid)
-      .eq('qc_case_id', qcCaseId);
+      .eq('qc_case_id', qcCaseId)
+      .eq('organization_id', organizationId);
 
     if (error) throw error;
     return new NextResponse(null, { status: 204 });

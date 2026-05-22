@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   dbUnavailableError,
+  getSessionIdentity,
   mapPostgresError,
-  requireOrganizationId,
+  requireRole,
 } from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
@@ -10,8 +11,9 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const organizationId = requireOrganizationId(req.nextUrl.searchParams);
-    if (organizationId instanceof NextResponse) return organizationId;
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
 
     const assignmentId = req.nextUrl.searchParams.get('assignment_id')?.trim();
 
@@ -32,14 +34,18 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { organization_id, assignment_id, submitted_by, notes } = body;
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { userId, organizationId, userRole } = session;
 
-    if (!organization_id || !assignment_id || !submitted_by) {
-      return NextResponse.json(
-        { error: 'organization_id, assignment_id, and submitted_by are required' },
-        { status: 400 },
-      );
+    const forbidden = requireRole({ userId, organizationId, userRole }, 'field_worker');
+    if (forbidden) return forbidden;
+
+    const body = await req.json();
+    const { assignment_id, notes } = body;
+
+    if (!assignment_id) {
+      return NextResponse.json({ error: 'assignment_id is required' }, { status: 400 });
     }
 
     const db = getProoflayerDb();
@@ -62,7 +68,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (assignment.organization_id !== organization_id) {
+    if (assignment.organization_id !== organizationId) {
       return NextResponse.json({ error: 'assignment_organization_mismatch' }, { status: 422 });
     }
 
@@ -84,9 +90,9 @@ export async function POST(req: NextRequest) {
     const { data: submission, error: insertErr } = await db
       .from('submissions')
       .insert({
-        organization_id,
+        organization_id: organizationId,
         assignment_id,
-        submitted_by,
+        submitted_by: userId,
         notes: notes ?? null,
         submitted_at: submittedAt,
       })
@@ -120,12 +126,12 @@ export async function POST(req: NextRequest) {
     }
 
     const { error: eventErr } = await db.from('assignment_events').insert({
-      organization_id,
+      organization_id: organizationId,
       assignment_id,
       event_type: 'submitted',
       from_status: 'in_progress',
       to_status: 'submitted',
-      actor_id: submitted_by,
+      actor_id: userId,
     });
 
     if (eventErr) {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   dbUnavailableError,
+  getSessionIdentity,
   mapPostgresError,
   rejectImmutableFields,
 } from '@/lib/api/http';
@@ -9,13 +10,22 @@ import { getProoflayerDb } from '@/lib/supabase/server';
 export const dynamic = 'force-dynamic';
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
+
     const { id } = await params;
     const db = getProoflayerDb();
-    const { data, error } = await db.from('evaluations').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await db
+      .from('evaluations')
+      .select('*')
+      .eq('id', id)
+      .eq('organization_id', organizationId)
+      .maybeSingle();
 
     if (error) throw error;
     if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -30,6 +40,10 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
+
     const { id } = await params;
     const body = await req.json();
 
@@ -54,6 +68,7 @@ export async function PATCH(
       .from('evaluations')
       .update(updates)
       .eq('id', id)
+      .eq('organization_id', organizationId)
       .select('*')
       .single();
 

@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError, requireOrganizationId } from '@/lib/api/http';
+import {
+  dbUnavailableError,
+  getSessionIdentity,
+  mapPostgresError,
+  requireRole,
+} from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
@@ -11,8 +16,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const organizationId = requireOrganizationId(req.nextUrl.searchParams);
-    if (organizationId instanceof NextResponse) return organizationId;
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
 
     const { id } = await params;
     const db = getProoflayerDb();
@@ -36,16 +42,19 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { userId, organizationId, userRole } = session;
+
+    const forbidden = requireRole({ userId, organizationId, userRole }, 'enterprise');
+    if (forbidden) return forbidden;
+
     const { id: qcCaseId } = await params;
     const body = await req.json();
-    const { kind, label, created_by, instructions, min_count, is_mandatory, sort_order } =
-      body;
+    const { kind, label, instructions, min_count, is_mandatory, sort_order } = body;
 
-    if (!kind || !label || !created_by) {
-      return NextResponse.json(
-        { error: 'kind, label, and created_by are required' },
-        { status: 400 },
-      );
+    if (!kind || !label) {
+      return NextResponse.json({ error: 'kind and label are required' }, { status: 400 });
     }
 
     if (!KINDS.includes(kind)) {
@@ -57,6 +66,7 @@ export async function POST(
       .from('qc_cases')
       .select('organization_id')
       .eq('id', qcCaseId)
+      .eq('organization_id', organizationId)
       .maybeSingle();
 
     if (caseErr) throw caseErr;
@@ -65,11 +75,11 @@ export async function POST(
     const { data, error } = await db
       .from('case_evidence_templates')
       .insert({
-        organization_id: qcCase.organization_id,
+        organization_id: organizationId,
         qc_case_id: qcCaseId,
         kind,
         label,
-        created_by,
+        created_by: userId,
         instructions: instructions ?? null,
         min_count: min_count ?? 1,
         is_mandatory: is_mandatory ?? true,

@@ -1,14 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError } from '@/lib/api/http';
+import {
+  dbUnavailableError,
+  getSessionIdentity,
+  mapPostgresError,
+  requireRole,
+} from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId, userRole, userId } = session;
+
+    const forbidden = requireRole({ userId, organizationId, userRole }, 'field_worker');
+    if (forbidden) return forbidden;
+
     const body = await req.json();
     const {
-      organization_id,
       assignment_id,
       lat,
       lng,
@@ -20,9 +31,9 @@ export async function POST(req: NextRequest) {
       device_info,
     } = body;
 
-    if (!organization_id || !assignment_id || lat == null || lng == null || !recorded_at) {
+    if (!assignment_id || lat == null || lng == null || !recorded_at) {
       return NextResponse.json(
-        { error: 'organization_id, assignment_id, lat, lng, and recorded_at are required' },
+        { error: 'assignment_id, lat, lng, and recorded_at are required' },
         { status: 400 },
       );
     }
@@ -31,7 +42,7 @@ export async function POST(req: NextRequest) {
     const { data, error } = await db
       .from('check_ins')
       .insert({
-        organization_id,
+        organization_id: organizationId,
         assignment_id,
         lat,
         lng,

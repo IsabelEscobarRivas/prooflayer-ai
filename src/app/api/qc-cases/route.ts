@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError, requireOrganizationId } from '@/lib/api/http';
+import {
+  dbUnavailableError,
+  getSessionIdentity,
+  mapPostgresError,
+  requireRole,
+} from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const organizationId = requireOrganizationId(req.nextUrl.searchParams);
-    if (organizationId instanceof NextResponse) return organizationId;
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
 
     const status = req.nextUrl.searchParams.get('status')?.trim();
     const available = req.nextUrl.searchParams.get('available') === 'true';
@@ -47,9 +53,15 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { userId, organizationId, userRole } = session;
+
+    const forbidden = requireRole({ userId, organizationId, userRole }, 'enterprise');
+    if (forbidden) return forbidden;
+
     const body = await req.json();
     const {
-      organization_id,
       title,
       description,
       instructions,
@@ -66,21 +78,17 @@ export async function POST(req: NextRequest) {
       priority,
       external_ref,
       status,
-      created_by,
     } = body;
 
-    if (!organization_id || !title || !created_by) {
-      return NextResponse.json(
-        { error: 'organization_id, title, and created_by are required' },
-        { status: 400 },
-      );
+    if (!title) {
+      return NextResponse.json({ error: 'title is required' }, { status: 400 });
     }
 
     const db = getProoflayerDb();
     const { data, error } = await db
       .from('qc_cases')
       .insert({
-        organization_id,
+        organization_id: organizationId,
         title,
         description: description ?? null,
         instructions: instructions ?? null,
@@ -97,7 +105,7 @@ export async function POST(req: NextRequest) {
         priority: priority ?? 'normal',
         external_ref: external_ref ?? null,
         status: status ?? 'draft',
-        created_by,
+        created_by: userId,
       })
       .select('*')
       .single();

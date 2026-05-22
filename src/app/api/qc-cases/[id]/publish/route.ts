@@ -1,14 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError } from '@/lib/api/http';
+import {
+  dbUnavailableError,
+  getSessionIdentity,
+  mapPostgresError,
+  requireRole,
+} from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId, userRole, userId } = session;
+
+    const forbidden = requireRole({ userId, organizationId, userRole }, 'enterprise');
+    if (forbidden) return forbidden;
+
     const { id } = await params;
     const db = getProoflayerDb();
 
@@ -16,6 +28,7 @@ export async function POST(
       .from('qc_cases')
       .select('*')
       .eq('id', id)
+      .eq('organization_id', organizationId)
       .maybeSingle();
 
     if (caseErr) throw caseErr;
@@ -45,6 +58,7 @@ export async function POST(
       .from('qc_cases')
       .update({ status: 'open', published_at: new Date().toISOString() })
       .eq('id', id)
+      .eq('organization_id', organizationId)
       .select('*')
       .single();
 

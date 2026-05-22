@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { validateAssignmentOrganization } from '@/lib/api/assignments';
 import {
   dbUnavailableError,
+  getSessionIdentity,
   mapPostgresError,
   rejectImmutableFields,
 } from '@/lib/api/http';
@@ -10,13 +11,22 @@ import { getProoflayerDb } from '@/lib/supabase/server';
 export const dynamic = 'force-dynamic';
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
+
     const { id } = await params;
     const db = getProoflayerDb();
-    const { data, error } = await db.from('assignments').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await db
+      .from('assignments')
+      .select('*')
+      .eq('id', id)
+      .eq('organization_id', organizationId)
+      .maybeSingle();
 
     if (error) throw error;
     if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -31,6 +41,10 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
+
     const { id } = await params;
     const body = await req.json();
 
@@ -42,18 +56,18 @@ export async function PATCH(
       .from('assignments')
       .select('*')
       .eq('id', id)
+      .eq('organization_id', organizationId)
       .maybeSingle();
 
     if (fetchErr) throw fetchErr;
     if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-    const organization_id = existing.organization_id;
     const qc_case_id = (body.qc_case_id as string | undefined) ?? existing.qc_case_id;
     const assigned_to = (body.assigned_to as string | undefined) ?? existing.assigned_to;
     const assigned_by = (body.assigned_by as string | undefined) ?? existing.assigned_by;
 
     const validation = await validateAssignmentOrganization(db, {
-      organization_id,
+      organization_id: organizationId,
       qc_case_id,
       assigned_to,
       assigned_by,
@@ -78,6 +92,7 @@ export async function PATCH(
       .from('assignments')
       .update(updates)
       .eq('id', id)
+      .eq('organization_id', organizationId)
       .select('*')
       .single();
 

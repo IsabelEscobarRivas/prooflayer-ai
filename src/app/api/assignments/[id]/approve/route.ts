@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError } from '@/lib/api/http';
+import {
+  dbUnavailableError,
+  getSessionIdentity,
+  mapPostgresError,
+  requireRole,
+} from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
@@ -9,20 +14,21 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { userId, organizationId, userRole } = session;
+
+    const forbidden = requireRole({ userId, organizationId, userRole }, 'enterprise');
+    if (forbidden) return forbidden;
+
     const { id } = await params;
-    const body = await req.json();
-    const { actor_id } = body;
-
-    if (!actor_id) {
-      return NextResponse.json({ error: 'actor_id is required' }, { status: 400 });
-    }
-
     const db = getProoflayerDb();
 
     const { data: assignment, error: fetchErr } = await db
       .from('assignments')
       .select('*')
       .eq('id', id)
+      .eq('organization_id', organizationId)
       .maybeSingle();
 
     if (fetchErr) throw fetchErr;
@@ -70,7 +76,7 @@ export async function PATCH(
       event_type: 'approved',
       from_status: 'submitted',
       to_status: 'approved',
-      actor_id,
+      actor_id: userId,
     });
 
     if (eventErr) throw eventErr;

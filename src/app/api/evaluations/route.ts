@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dbUnavailableError, mapPostgresError, requireOrganizationId } from '@/lib/api/http';
+import { dbUnavailableError, getSessionIdentity, mapPostgresError } from '@/lib/api/http';
 import { getProoflayerDb } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const organizationId = requireOrganizationId(req.nextUrl.searchParams);
-    if (organizationId instanceof NextResponse) return organizationId;
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
 
     const assignmentId = req.nextUrl.searchParams.get('assignment_id')?.trim();
     const submissionId = req.nextUrl.searchParams.get('submission_id')?.trim();
@@ -28,9 +29,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = getSessionIdentity(req);
+    if (session instanceof NextResponse) return session;
+    const { organizationId } = session;
+
     const body = await req.json();
     const {
-      organization_id,
       submission_id,
       assignment_id,
       reviewer_id,
@@ -42,9 +46,9 @@ export async function POST(req: NextRequest) {
       ai_evaluated_at,
     } = body;
 
-    if (!organization_id || !submission_id || !assignment_id) {
+    if (!submission_id || !assignment_id) {
       return NextResponse.json(
-        { error: 'organization_id, submission_id, and assignment_id are required' },
+        { error: 'submission_id and assignment_id are required' },
         { status: 400 },
       );
     }
@@ -53,7 +57,7 @@ export async function POST(req: NextRequest) {
     const { data, error } = await db
       .from('evaluations')
       .insert({
-        organization_id,
+        organization_id: organizationId,
         submission_id,
         assignment_id,
         reviewer_id: reviewer_id ?? null,
