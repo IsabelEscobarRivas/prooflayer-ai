@@ -2,11 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { signOut } from '@/lib/auth/sign-out';
-import {
-  ENTERPRISE_USER_ID,
-  FIELD_WORKER_ID,
-  ORGANIZATION_ID,
-} from '@/lib/identity';
+import { createBrowserClient } from '@/lib/supabase/client';
 
 const NAVY = '#1B2D4F';
 const BLUE = '#2E6DA4';
@@ -134,12 +130,33 @@ export default function FieldPage() {
   const [checkingInId, setCheckingInId] = useState<string | null>(null);
   const [uploadingReqId, setUploadingReqId] = useState<string | null>(null);
 
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userLabel, setUserLabel] = useState('Field Worker');
+
+  useEffect(() => {
+    void (async () => {
+      const supabase = createBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        window.location.href = '/';
+        return;
+      }
+      setUserId(user.id);
+      const profileRes = await fetch(`/api/users/${user.id}`);
+      if (profileRes.ok) {
+        const profile = (await profileRes.json()) as { full_name: string | null; email: string };
+        setUserLabel(profile.full_name ?? profile.email);
+      } else {
+        setUserLabel(user.email ?? 'Field Worker');
+      }
+    })();
+  }, []);
+
   const fetchOpenCases = useCallback(async () => {
     setLoadingCases(true);
     setCasesError(null);
     try {
       const params = new URLSearchParams({
-        organization_id: ORGANIZATION_ID,
         available: 'true',
         status: 'open',
       });
@@ -154,9 +171,7 @@ export default function FieldPage() {
       setOpenCases(cases);
       const tmap: Record<string, Template[]> = {};
       for (const c of cases) {
-        const tr = await fetch(
-          `/api/qc-cases/${c.id}/templates?organization_id=${encodeURIComponent(ORGANIZATION_ID)}`,
-        );
+        const tr = await fetch(`/api/qc-cases/${c.id}/templates`);
         tmap[c.id] = tr.ok ? ((await tr.json()) as Template[]) : [];
       }
       setTemplatesByCase(tmap);
@@ -168,12 +183,12 @@ export default function FieldPage() {
     }
   }, []);
 
-  const fetchAssignments = useCallback(async () => {
+  const fetchAssignments = useCallback(async (currentUserId: string) => {
     setLoadingAssignments(true);
     setAssignmentsError(null);
     try {
       const res = await fetch(
-        `/api/assignments?organization_id=${encodeURIComponent(ORGANIZATION_ID)}&assigned_to=${FIELD_WORKER_ID}`,
+        `/api/assignments?assigned_to=${encodeURIComponent(currentUserId)}`,
       );
       if (!res.ok) {
         setAssignments([]);
@@ -194,9 +209,7 @@ export default function FieldPage() {
         }
         const rr = await fetch(`/api/assignments/${a.id}/requirements`);
         rmap[a.id] = rr.ok ? ((await rr.json()) as Requirement[]) : [];
-        const fr = await fetch(
-          `/api/evidence-files?organization_id=${encodeURIComponent(ORGANIZATION_ID)}&assignment_id=${a.id}`,
-        );
+        const fr = await fetch(`/api/evidence-files?assignment_id=${a.id}`);
         fmap[a.id] = fr.ok ? ((await fr.json()) as EvidenceFile[]) : [];
       }
       setCasesById(cmap);
@@ -211,12 +224,14 @@ export default function FieldPage() {
   }, []);
 
   const refresh = useCallback(async () => {
-    await Promise.all([fetchOpenCases(), fetchAssignments()]);
-  }, [fetchOpenCases, fetchAssignments]);
+    if (!userId) return;
+    await Promise.all([fetchOpenCases(), fetchAssignments(userId)]);
+  }, [userId, fetchOpenCases, fetchAssignments]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (!userId) return;
+    void refresh();
+  }, [userId, refresh]);
 
   async function handleAccept(qcCaseId: string) {
     setActionError(null);
@@ -227,10 +242,7 @@ export default function FieldPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          organization_id: ORGANIZATION_ID,
           qc_case_id: qcCaseId,
-          assigned_to: FIELD_WORKER_ID,
-          assigned_by: ENTERPRISE_USER_ID,
         }),
       });
       if (!res.ok) {
@@ -268,7 +280,6 @@ export default function FieldPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          organization_id: ORGANIZATION_ID,
           assignment_id: assignmentId,
           lat,
           lng,
@@ -309,10 +320,8 @@ export default function FieldPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          organization_id: ORGANIZATION_ID,
           assignment_id: assignmentId,
           assignment_evidence_requirement_id: requirementId,
-          uploaded_by: FIELD_WORKER_ID,
           storage_path: `pending/${assignmentId}/${file.name}`,
           mime_type: file.type || null,
           byte_size: file.size,
@@ -325,7 +334,7 @@ export default function FieldPage() {
         return;
       }
       setSuccessMsg(`Evidence uploaded: ${file.name}`);
-      await fetchAssignments();
+      if (userId) await fetchAssignments(userId);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : 'Upload failed');
     } finally {
@@ -341,9 +350,7 @@ export default function FieldPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          organization_id: ORGANIZATION_ID,
           assignment_id: assignmentId,
-          submitted_by: FIELD_WORKER_ID,
           notes: notesByAssignment[assignmentId]?.trim() || null,
         }),
       });
@@ -373,7 +380,7 @@ export default function FieldPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <div style={{ width: 32, height: 32, borderRadius: '50%', background: BLUE, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 700 }}>FW</div>
-            <span style={{ fontSize: '0.85rem' }}>Field Worker</span>
+            <span style={{ fontSize: '0.85rem' }}>{userLabel}</span>
           </div>
           <button
             type="button"

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { signOut } from '@/lib/auth/sign-out';
-import { ENTERPRISE_USER_ID, ORGANIZATION_ID } from '@/lib/identity';
+import { createBrowserClient } from '@/lib/supabase/client';
 
 const NAVY = '#1B2D4F';
 const BLUE = '#2E6DA4';
@@ -173,6 +173,28 @@ export default function EnterprisePage() {
   const [saving, setSaving] = useState(false);
   const [acting, setActing] = useState(false);
 
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userLabel, setUserLabel] = useState('Enterprise Manager');
+
+  useEffect(() => {
+    void (async () => {
+      const supabase = createBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        window.location.href = '/';
+        return;
+      }
+      setUserId(user.id);
+      const profileRes = await fetch(`/api/users/${user.id}`);
+      if (profileRes.ok) {
+        const profile = (await profileRes.json()) as { full_name: string | null; email: string };
+        setUserLabel(profile.full_name ?? profile.email);
+      } else {
+        setUserLabel(user.email ?? 'Enterprise Manager');
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     if (!timeStart) return;
     const start = new Date(timeStart);
@@ -184,9 +206,7 @@ export default function EnterprisePage() {
     setLoadingCases(true);
     setListError(null);
     try {
-      const res = await fetch(
-        `/api/qc-cases?organization_id=${encodeURIComponent(ORGANIZATION_ID)}`,
-      );
+      const res = await fetch('/api/qc-cases');
       if (!res.ok) {
         setCases([]);
         setListError(await errorFromResponse(res));
@@ -194,9 +214,7 @@ export default function EnterprisePage() {
       }
       const data = (await res.json()) as QcCase[];
       setCases(data);
-      const aRes = await fetch(
-        `/api/assignments?organization_id=${encodeURIComponent(ORGANIZATION_ID)}`,
-      );
+      const aRes = await fetch('/api/assignments');
       if (aRes.ok) {
         const assigns = (await aRes.json()) as Assignment[];
         const map: Record<string, Assignment[]> = {};
@@ -217,9 +235,7 @@ export default function EnterprisePage() {
     setLoadingReview(true);
     setReviewError(null);
     try {
-      const res = await fetch(
-        `/api/assignments?organization_id=${encodeURIComponent(ORGANIZATION_ID)}&status=submitted`,
-      );
+      const res = await fetch('/api/assignments?status=submitted');
       if (!res.ok) {
         setReviewList([]);
         setReviewError(await errorFromResponse(res));
@@ -243,9 +259,10 @@ export default function EnterprisePage() {
   }, []);
 
   useEffect(() => {
+    if (!userId) return;
     fetchCases();
     fetchReview();
-  }, [fetchCases, fetchReview]);
+  }, [userId, fetchCases, fetchReview]);
 
   const filteredCases =
     caseFilter === 'all' ? cases : cases.filter((c) => c.status === caseFilter);
@@ -313,7 +330,6 @@ export default function EnterprisePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          organization_id: ORGANIZATION_ID,
           title: title.trim(),
           instructions: instructions.trim() || null,
           store_name: storeName.trim(),
@@ -328,7 +344,6 @@ export default function EnterprisePage() {
           priority,
           external_ref: externalRef.trim() || null,
           status: 'draft',
-          created_by: ENTERPRISE_USER_ID,
         }),
       });
       if (!caseRes.ok) {
@@ -345,7 +360,6 @@ export default function EnterprisePage() {
             kind: req.kind,
             label: req.label,
             instructions: req.instructions || null,
-            created_by: ENTERPRISE_USER_ID,
           }),
         });
         if (!tr.ok) {
@@ -381,9 +395,7 @@ export default function EnterprisePage() {
     }
     setExpandedCaseId(id);
     setActionError(null);
-    const res = await fetch(
-      `/api/qc-cases/${id}/templates?organization_id=${encodeURIComponent(ORGANIZATION_ID)}`,
-    );
+    const res = await fetch(`/api/qc-cases/${id}/templates`);
     if (!res.ok) {
       setCaseTemplates([]);
       setActionError(await errorFromResponse(res));
@@ -419,7 +431,7 @@ export default function EnterprisePage() {
       const res = await fetch(`/api/assignments/${id}/approve`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ actor_id: ENTERPRISE_USER_ID }),
+        body: JSON.stringify({}),
       });
       if (!res.ok) {
         setActionError(await errorFromResponse(res));
@@ -444,7 +456,7 @@ export default function EnterprisePage() {
       const res = await fetch(`/api/assignments/${id}/reject`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ actor_id: ENTERPRISE_USER_ID, reason: rejectReason.trim() }),
+        body: JSON.stringify({ reason: rejectReason.trim() }),
       });
       if (!res.ok) {
         setActionError(await errorFromResponse(res));
@@ -472,7 +484,7 @@ export default function EnterprisePage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <div style={{ width: 32, height: 32, borderRadius: '50%', background: BLUE, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 700 }}>AC</div>
-            <span style={{ fontSize: '0.85rem' }}>Alex Chen</span>
+            <span style={{ fontSize: '0.85rem' }}>{userLabel}</span>
           </div>
           <button
             type="button"
