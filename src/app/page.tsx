@@ -1,12 +1,102 @@
 'use client';
 
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useCallback, useState } from 'react';
+import { createBrowserClient } from '@/lib/supabase/client';
+
+export { signOut } from '@/lib/auth/sign-out';
 
 const NAVY = '#1B2D4F';
 const BLUE = '#2E6DA4';
 const LIGHT_BLUE = '#D6E4F0';
 
+const DEMO_ENTERPRISE = { email: 'alex@prooflayer.ai', password: 'demo123' };
+const DEMO_FIELD = { email: 'jordan@prooflayer.ai', password: 'demo123' };
+
+const NOT_PROVISIONED = 'Account not provisioned. Contact your administrator.';
+
+type ProoflayerUser = { id: string; role: string };
+
 export default function Home() {
+  const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSignIn = useCallback(
+    async (credentials: { email: string; password: string }) => {
+      setError(null);
+      setSubmitting(true);
+      try {
+        const supabase = createBrowserClient();
+        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+          email: credentials.email.trim(),
+          password: credentials.password,
+        });
+
+        if (authError) {
+          setError(authError.message);
+          return;
+        }
+
+        const authUserId = authData.user?.id;
+        if (!authUserId) {
+          setError('Sign-in succeeded but no user id was returned.');
+          return;
+        }
+
+        const res = await fetch(`/api/users/${authUserId}`);
+        if (res.status === 404) {
+          await supabase.auth.signOut();
+          setError(NOT_PROVISIONED);
+          return;
+        }
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: string };
+          setError(body.error ?? `Could not load user profile (${res.status})`);
+          return;
+        }
+
+        const user = (await res.json()) as ProoflayerUser;
+        if (user.role === 'enterprise') {
+          router.push('/enterprise');
+        } else if (user.role === 'field_worker') {
+          router.push('/field');
+        } else {
+          await supabase.auth.signOut();
+          setError(`Unknown role: ${user.role}`);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Sign-in failed');
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [router],
+  );
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email.trim() || !password) {
+      setError('Email and password are required.');
+      return;
+    }
+    await handleSignIn({ email, password });
+  }
+
+  function demoEnterprise() {
+    setEmail(DEMO_ENTERPRISE.email);
+    setPassword(DEMO_ENTERPRISE.password);
+    void handleSignIn(DEMO_ENTERPRISE);
+  }
+
+  function demoFieldWorker() {
+    setEmail(DEMO_FIELD.email);
+    setPassword(DEMO_FIELD.password);
+    void handleSignIn(DEMO_FIELD);
+  }
+
   return (
     <main
       style={{
@@ -55,31 +145,76 @@ export default function Home() {
           Geospatial Verification Platform
         </p>
 
-        <label style={labelStyle}>
-          Email
-          <input type="email" defaultValue="demo@prooflayer.ai" style={inputStyle} readOnly />
-        </label>
-        <label style={{ ...labelStyle, marginTop: '0.85rem' }}>
-          Password
-          <input type="password" defaultValue="demo123" style={inputStyle} readOnly />
-        </label>
-        <p style={{ color: '#64748b', fontSize: '0.8rem', margin: '0.5rem 0 1.25rem' }}>
-          Demo password: demo123
-        </p>
+        <form onSubmit={onSubmit}>
+          <label style={labelStyle}>
+            Email
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+              style={inputStyle}
+            />
+          </label>
+          <label style={{ ...labelStyle, marginTop: '0.85rem' }}>
+            Password
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              style={inputStyle}
+            />
+          </label>
 
+          {error && (
+            <p style={{ color: '#C62828', fontSize: '0.85rem', margin: '0.75rem 0 0' }} role="alert">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            style={{
+              ...submitBtnStyle,
+              marginTop: '1.25rem',
+              opacity: submitting ? 0.7 : 1,
+              cursor: submitting ? 'wait' : 'pointer',
+            }}
+          >
+            {submitting ? 'Signing in…' : 'Sign In'}
+          </button>
+        </form>
+
+        <p style={{ color: '#64748b', fontSize: '0.8rem', margin: '1.25rem 0 0.75rem', textAlign: 'center' }}>
+          Demo accounts
+        </p>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <Link href="/enterprise" style={roleCardStyle}>
-            <strong style={{ color: NAVY, fontSize: '0.95rem' }}>Enterprise Manager</strong>
+          <button
+            type="button"
+            onClick={demoEnterprise}
+            disabled={submitting}
+            style={roleCardStyle}
+          >
+            <strong style={{ color: NAVY, fontSize: '0.95rem' }}>Demo: Enterprise</strong>
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.4 }}>
-              Dashboard · Case creation · Reports
+              alex@prooflayer.ai
             </p>
-          </Link>
-          <Link href="/field" style={roleCardStyle}>
-            <strong style={{ color: NAVY, fontSize: '0.95rem' }}>Field Worker</strong>
+          </button>
+          <button
+            type="button"
+            onClick={demoFieldWorker}
+            disabled={submitting}
+            style={roleCardStyle}
+          >
+            <strong style={{ color: NAVY, fontSize: '0.95rem' }}>Demo: Field Worker</strong>
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.4 }}>
-              Task list · Geo check-in · Evidence upload
+              jordan@prooflayer.ai
             </p>
-          </Link>
+          </button>
         </div>
       </div>
     </main>
@@ -104,13 +239,24 @@ const inputStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 };
 
+const submitBtnStyle: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  padding: '0.65rem 1rem',
+  background: BLUE,
+  color: '#fff',
+  border: 'none',
+  borderRadius: '6px',
+  fontSize: '0.95rem',
+  fontWeight: 600,
+};
+
 const roleCardStyle: React.CSSProperties = {
   flex: 1,
   padding: '1rem',
   background: LIGHT_BLUE,
   border: `2px solid ${BLUE}`,
   borderRadius: '10px',
-  textDecoration: 'none',
-  display: 'block',
-  transition: 'box-shadow 0.15s',
+  cursor: 'pointer',
+  textAlign: 'left',
 };

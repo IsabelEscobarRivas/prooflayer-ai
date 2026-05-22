@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
+import { signOut } from '@/lib/auth/sign-out';
 import {
   ENTERPRISE_USER_ID,
   FIELD_WORKER_ID,
@@ -375,7 +375,21 @@ export default function FieldPage() {
             <div style={{ width: 32, height: 32, borderRadius: '50%', background: BLUE, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 700 }}>FW</div>
             <span style={{ fontSize: '0.85rem' }}>Field Worker</span>
           </div>
-          <Link href="/" style={{ color: '#93c5fd', fontSize: '0.85rem' }}>Sign out</Link>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#93c5fd',
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              padding: 0,
+              textDecoration: 'underline',
+            }}
+          >
+            Sign out
+          </button>
         </div>
       </header>
 
