@@ -1,3 +1,4 @@
+import { createRequestLogger } from '@/lib/logger';
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import { getProoflayerDb } from '@/lib/supabase/server';
@@ -8,6 +9,9 @@ export async function middleware(request: NextRequest) {
   if (pathname.startsWith('/api/auth') || pathname.startsWith('/api/webhooks')) {
     return NextResponse.next();
   }
+
+  const requestId = crypto.randomUUID();
+  const log = createRequestLogger(requestId, pathname, null, null);
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
@@ -49,10 +53,23 @@ export async function middleware(request: NextRequest) {
       .maybeSingle();
 
     if (error || !profile) {
+      log.warn('auth.provisioning_failed', {
+        user_id: user.id,
+        reason: 'no_prooflayer_user_row',
+      });
       return NextResponse.json({ error: 'Account not provisioned' }, { status: 403 });
     }
 
+    const authedLog = createRequestLogger(
+      requestId,
+      pathname,
+      user.id,
+      profile.organization_id,
+    );
+    void authedLog;
+
     const requestHeaders = new Headers(request.headers);
+    requestHeaders.set('x-request-id', requestId);
     requestHeaders.set('x-user-id', user.id);
     requestHeaders.set('x-organization-id', profile.organization_id);
     requestHeaders.set('x-user-role', profile.role);
@@ -62,6 +79,8 @@ export async function middleware(request: NextRequest) {
         headers: requestHeaders,
       },
     });
+
+    nextResponse.headers.set('x-request-id', requestId);
 
     supabaseResponse.cookies.getAll().forEach(({ name, value }) => {
       nextResponse.cookies.set(name, value);
