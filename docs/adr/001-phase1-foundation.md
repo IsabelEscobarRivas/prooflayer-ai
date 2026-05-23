@@ -1,30 +1,20 @@
-# ADR-001: Phase 1 Foundation — Database & Persistence
+# ADR-001 — Phase 1 Foundation
+**Status:** Accepted  
+**Date:** 2026-05-19  
+**Phase:** 1
 
-| Field | Value |
-|-------|-------|
-| Status | **APPROVED** |
-| Version | 1.0 |
-| Date | 2026-05-19 |
-| Scope | `prooflayer` schema: organizations, users, qc_cases, assignments |
+## Context
+Established the foundational schema, API, and UI for ProofLayer.
+Defined the prooflayer schema, core tables, and API boundary.
 
-See team-approved full text in project documentation. This file is the canonical reference for Phase 1 implementation.
+## Key Decisions
+- Schema: prooflayer (not public)
+- Tables: organizations, users, qc_cases, assignments
+- users.id mirrors auth.users.id (no DEFAULT) to enable future auth
+- TEXT+CHECK enums — no Postgres enum types
+- All tables: set_updated_at trigger, UUID PKs
+- API uses service role client only — no client-side Supabase queries
+- 13 route files covering organizations, users, qc_cases, assignments
 
-## Implementation mapping
-
-| ADR | Repo artifact |
-|-----|----------------|
-| §3 Schema | `supabase/migrations/001_foundation.sql` |
-| §5 Indexes | Same migration |
-| §6 API | `src/app/api/*` (to be implemented) |
-| §11 QA checklist | `docs/PHASE1_QA_CHECKLIST.md` |
-
-## Product loop (Phase 1)
-
-1. Enterprise creates QC case (`POST /api/qc-cases`, status → `open`)
-2. Field lists available cases (`GET /api/qc-cases?organization_id=&status=open`, exclude cases with active assignment)
-3. Field accepts via assignment (`POST /api/assignments`, `assigned_to` = self, `status` → `in_progress` via PATCH or create)
-4. Refresh — rows read only from `prooflayer.*` tables
-
-## Out of scope (Phase 1)
-
-Evidence, storage, Gemini, evaluations, RLS, audit/events tables, geo, reports, JSONB columns, `public` schema tables.
+## Full Document
+ProofLayer_ADR_001_Phase1.docx
