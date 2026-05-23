@@ -67,7 +67,16 @@ export async function PATCH(
         .update({ status: 'closed' })
         .eq('id', assignment.qc_case_id);
 
-      if (caseErr) throw caseErr;
+      if (caseErr) {
+        console.error('[approve] Case status update failed after assignment approved:', caseErr);
+        return NextResponse.json(
+          {
+            error: 'partial_update_failed',
+            message: 'Assignment approved but case status update failed. Please retry.',
+          },
+          { status: 500 },
+        );
+      }
     }
 
     const { error: eventErr } = await db.from('assignment_events').insert({

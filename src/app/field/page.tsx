@@ -99,16 +99,19 @@ function formatTimeWindow(start: string | null, end: string | null): string | nu
   return null;
 }
 
-function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000;
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+
+type CheckInStatus = 'unchecked' | 'checking' | 'within' | 'outside';
 
 export default function FieldPage() {
   const router = useRouter();
@@ -130,6 +133,15 @@ export default function FieldPage() {
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [checkingInId, setCheckingInId] = useState<string | null>(null);
+  const [checkInStatusByAssignment, setCheckInStatusByAssignment] = useState<
+    Record<string, CheckInStatus>
+  >({});
+  const [checkInDistanceByAssignment, setCheckInDistanceByAssignment] = useState<
+    Record<string, number>
+  >({});
+  const [checkInRadiusByAssignment, setCheckInRadiusByAssignment] = useState<
+    Record<string, number>
+  >({});
   const [uploadingReqId, setUploadingReqId] = useState<string | null>(null);
 
   const [userId, setUserId] = useState<string | null>(null);
@@ -268,24 +280,36 @@ export default function FieldPage() {
     }
   }
 
-  async function handleCheckIn(assignmentId: string, qcCase: QcCase | undefined) {
+  async function handleCheckIn(assignmentId: string, qcCaseId: string) {
     setActionError(null);
+    setCheckInStatusByAssignment((p) => ({ ...p, [assignmentId]: 'checking' }));
     setCheckingInId(assignmentId);
     try {
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true });
       });
+
+      const caseRes = await fetch(`/api/qc-cases/${qcCaseId}`);
+      if (!caseRes.ok) {
+        setActionError(await errorFromResponse(caseRes));
+        setCheckInStatusByAssignment((p) => ({ ...p, [assignmentId]: 'unchecked' }));
+        return;
+      }
+      const caseData = (await caseRes.json()) as QcCase;
+
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
       const accuracy = position.coords.accuracy;
-      let distance: number | null = null;
-      let within: boolean | null = null;
-      if (qcCase?.geo_lat != null && qcCase?.geo_lng != null) {
-        distance = haversineM(lat, lng, Number(qcCase.geo_lat), Number(qcCase.geo_lng));
-        if (qcCase.geo_radius_m != null) {
-          within = distance <= qcCase.geo_radius_m;
-        }
+
+      const radius = caseData.geo_radius_m ?? 100;
+      let distance = 0;
+      let within = false;
+
+      if (caseData.geo_lat != null && caseData.geo_lng != null) {
+        distance = haversineMeters(lat, lng, Number(caseData.geo_lat), Number(caseData.geo_lng));
+        within = distance <= radius;
       }
+
       const res = await fetch('/api/check-ins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -296,23 +320,38 @@ export default function FieldPage() {
           recorded_at: new Date().toISOString(),
           accuracy_m: accuracy,
           distance_from_target_m: distance,
-          geo_radius_m: qcCase?.geo_radius_m ?? null,
+          geo_radius_m: caseData.geo_radius_m,
           is_within_geofence: within,
           device_info: navigator.userAgent,
         }),
       });
       if (!res.ok) {
         setActionError(await errorFromResponse(res));
+        setCheckInStatusByAssignment((p) => ({ ...p, [assignmentId]: 'unchecked' }));
         return;
       }
+
       const row = (await res.json()) as CheckIn;
       setCheckInsByAssignment((p) => ({
         ...p,
         [assignmentId]: [...(p[assignmentId] ?? []), row],
       }));
-      setSuccessMsg(within === false ? 'Check-in recorded — outside geofence' : 'Check-in recorded');
+      setCheckInDistanceByAssignment((p) => ({ ...p, [assignmentId]: Math.round(distance) }));
+      setCheckInRadiusByAssignment((p) => ({ ...p, [assignmentId]: radius }));
+      setCheckInStatusByAssignment((p) => ({
+        ...p,
+        [assignmentId]: within ? 'within' : 'outside',
+      }));
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : 'Check-in failed — enable location access');
+      const geoCode = e && typeof e === 'object' && 'code' in e ? (e as { code: number }).code : null;
+      if (geoCode === 1) {
+        setActionError(
+          'Location permission required. Enable location access in your browser settings.',
+        );
+      } else {
+        setActionError(e instanceof Error ? e.message : 'Check-in failed');
+      }
+      setCheckInStatusByAssignment((p) => ({ ...p, [assignmentId]: 'unchecked' }));
     } finally {
       setCheckingInId(null);
     }
@@ -453,6 +492,11 @@ export default function FieldPage() {
             const reqs = reqsByAssignment[a.id] ?? [];
             const files = filesByAssignment[a.id] ?? [];
             const checkIns = checkInsByAssignment[a.id] ?? [];
+            const checkInStatus = checkInStatusByAssignment[a.id] ?? 'unchecked';
+            const geoRequired = qc?.geo_lat != null;
+            const canSubmit = !geoRequired || checkInStatus === 'within';
+            const distanceM = checkInDistanceByAssignment[a.id];
+            const radiusM = checkInRadiusByAssignment[a.id];
             return (
               <div key={a.id} style={listCard}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -477,20 +521,64 @@ export default function FieldPage() {
 
                     <div style={{ marginTop: '0.75rem', background: LIGHT_BLUE, padding: '0.75rem', borderRadius: 8 }}>
                       <strong style={{ fontSize: '0.9rem', color: NAVY }}>Geo Check-in</strong>
-                      {qc?.geo_lat != null && (
-                        <p style={{ fontSize: '0.8rem', color: '#666', margin: '0.25rem 0' }}>
-                          Target: {qc.geo_lat}, {qc.geo_lng} · radius {qc.geo_radius_m ?? '—'}m
+                      {!geoRequired ? (
+                        <p style={{ fontSize: '0.85rem', color: '#888', margin: '0.5rem 0 0' }}>
+                          Location check not required for this case
                         </p>
-                      )}
-                      <button type="button" disabled={checkingInId === a.id} onClick={() => handleCheckIn(a.id, qc)} style={{ ...btnPrimary(NAVY), marginTop: '0.35rem' }}>
-                        {checkingInId === a.id ? 'Checking in…' : 'Record Check-in'}
-                      </button>
-                      {checkIns.length > 0 && (
-                        <ul style={{ fontSize: '0.8rem', margin: '0.5rem 0 0', paddingLeft: '1.2rem' }}>
-                          {checkIns.map((ci) => (
-                            <li key={ci.id}>{new Date(ci.recorded_at).toLocaleString()} {ci.is_within_geofence === true ? '✓ in geofence' : ci.is_within_geofence === false ? '✗ outside' : ''}</li>
-                          ))}
-                        </ul>
+                      ) : (
+                        <>
+                          {qc?.geo_lat != null && (
+                            <p style={{ fontSize: '0.8rem', color: '#666', margin: '0.25rem 0' }}>
+                              Target: {qc.geo_lat}, {qc.geo_lng} · radius {qc.geo_radius_m ?? 100}m
+                            </p>
+                          )}
+                          {checkInStatus !== 'outside' && (
+                            <button
+                              type="button"
+                              disabled={checkingInId === a.id}
+                              onClick={() => handleCheckIn(a.id, a.qc_case_id)}
+                              style={{ ...btnPrimary(NAVY), marginTop: '0.35rem' }}
+                            >
+                              {checkingInId === a.id || checkInStatus === 'checking'
+                                ? 'Checking in…'
+                                : 'Check In'}
+                            </button>
+                          )}
+                          {checkInStatus === 'within' && distanceM != null && (
+                            <p style={{ fontSize: '0.85rem', color: '#2E7D32', margin: '0.5rem 0 0', fontWeight: 600 }}>
+                              ✓ Checked in — within {distanceM}m of store
+                            </p>
+                          )}
+                          {checkInStatus === 'outside' && distanceM != null && radiusM != null && (
+                            <>
+                              <p style={{ fontSize: '0.85rem', color: '#C62828', margin: '0.5rem 0 0', fontWeight: 600 }}>
+                                ✗ {distanceM}m from store. Must be within {radiusM}m.
+                              </p>
+                              <button
+                                type="button"
+                                disabled={checkingInId === a.id}
+                                onClick={() => handleCheckIn(a.id, a.qc_case_id)}
+                                style={{ ...btnGhost, marginTop: '0.35rem' }}
+                              >
+                                Try Again
+                              </button>
+                            </>
+                          )}
+                          {checkIns.length > 0 && checkInStatus === 'unchecked' && (
+                            <ul style={{ fontSize: '0.8rem', margin: '0.5rem 0 0', paddingLeft: '1.2rem' }}>
+                              {checkIns.map((ci) => (
+                                <li key={ci.id}>
+                                  {new Date(ci.recorded_at).toLocaleString()}{' '}
+                                  {ci.is_within_geofence === true
+                                    ? '✓ in geofence'
+                                    : ci.is_within_geofence === false
+                                      ? '✗ outside'
+                                      : ''}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </>
                       )}
                     </div>
 
@@ -526,9 +614,15 @@ export default function FieldPage() {
                     <label style={lbl}>Submission notes
                       <textarea value={notesByAssignment[a.id] ?? ''} onChange={(e) => setNotesByAssignment((p) => ({ ...p, [a.id]: e.target.value }))} rows={2} style={inp} />
                     </label>
-                    <button type="button" disabled={submittingId === a.id} onClick={() => handleSubmit(a.id)} style={{ ...btnPrimary(BLUE), marginTop: '0.5rem' }}>
-                      {submittingId === a.id ? 'Submitting…' : 'Submit for Review'}
-                    </button>
+                    {canSubmit ? (
+                      <button type="button" disabled={submittingId === a.id} onClick={() => handleSubmit(a.id)} style={{ ...btnPrimary(BLUE), marginTop: '0.5rem' }}>
+                        {submittingId === a.id ? 'Submitting…' : 'Submit for Review'}
+                      </button>
+                    ) : (
+                      <p style={{ fontSize: '0.85rem', color: '#888', marginTop: '0.5rem' }}>
+                        Complete a successful geo check-in before submitting.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -559,3 +653,12 @@ const err: React.CSSProperties = { color: '#C62828' };
 function btnPrimary(bg: string): React.CSSProperties {
   return { padding: '0.55rem 1rem', background: bg, color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' };
 }
+const btnGhost: React.CSSProperties = {
+  padding: '0.45rem 0.85rem',
+  background: '#fff',
+  color: NAVY,
+  border: `1px solid ${NAVY}`,
+  borderRadius: 6,
+  cursor: 'pointer',
+  fontSize: '0.85rem',
+};
